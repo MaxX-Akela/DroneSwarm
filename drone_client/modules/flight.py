@@ -21,16 +21,12 @@ START_Z = 1
 def stop_swarm():
     navigate(frame_id="body", yaw=float('nan'), speed=0.5)
 
-def set_pos(x, y, z, yaw=float('nan'), frame_id=SWARM_FRAME, auto_arm=False, **kwargs):
-
-    navigate(x=x, y=y, z=z, yaw=yaw, auto_arm=auto_arm, frame_id=frame_id)
-
-    print(f"x: {x:.2f} | y: {y:.2f} | z: {z:.2f} | yaw: {yaw:.2f}")
-
-    return True
+def position(x, y, z, yaw=float('nan')):
+    set_position(x=x, y=y, z=z, yaw=yaw, frame_id="map")
 
 def navigate_wait(x=0, y=0, z=0, yaw=float('nan'), speed=0.5, frame_id='', auto_arm=False, tolerance=0.2, timeout=10):
-    
+
+    telem = get_telemetry(frame_id='navigate_target')
     try:
         nav = navigate(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id, auto_arm=auto_arm)
         if not nav.success:
@@ -39,43 +35,29 @@ def navigate_wait(x=0, y=0, z=0, yaw=float('nan'), speed=0.5, frame_id='', auto_
         return False
 
     start_time = rospy.get_time()
-    rate = rospy.Rate(10)
     dist = math.sqrt(telem.x ** 2 + telem.y ** 2 + telem.z ** 2)
 
     while not rospy.is_shutdown():
-        telem = get_telemetry(frame_id='navigate_target')
-
         if dist < tolerance:
             return True
-        
         if timeout is not None and (rospy.get_time() - start_time) >  timeout:
             return False
-
         rospy.sleep(0.2)
 
-def takeoff(frame_id=SWARM_FRAME, z=START_Z):
-
-    navigate(z=z, frame_id=frame_id, speed=0.5, yaw=math.nan)
-
-    while True:
-        telemetry = get_telemetry(frame_id=frame_id)
-        if telemetry.z >= z - 0.05:  
-            print("TakeOff complete")
+def takeoff(z=1.0):
+    navigate(z=z, frame_id="map", speed=0.5, auto_arm=True)
+    while not rospy.is_shutdown():
+        if get_telemetry().z >= z - 0.1:
             break
-        time.sleep(0.1)
+        rospy.sleep(0.2)
 
-def swarm_land(landing=True, landing_z=0.5, timeout=10):
-
-    if landing == True:
-        navigate_wait(z=landing_z, frame_id="body")
+def swarm_land():
     land()
-
     start_time = rospy.get_time()    
-    while not rospy.is_shitdown():
-
-        if get_telemetry().armed:
+    while not rospy.is_shutdown():
+        if not get_telemetry().armed:
             return True
-        
-        if (rospy.get_time() - start_time) > timeout:
-            arming(False)
+        if (rospy.get_time() - start_time) > 10:
+            arming(False) # Принудительный дизарм
             return False
+        rospy.sleep(0.2)
