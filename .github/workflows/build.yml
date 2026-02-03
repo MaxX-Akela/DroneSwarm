@@ -20,7 +20,7 @@ jobs:
             -v /dev:/dev \
             -v ${GITHUB_WORKSPACE}:/mnt \
             -e TRAVIS_TAG=${{ github.ref_name }} \
-            copterexpress/image-builder:v0.25 \
+            copterexpress/image-builder:v0.12 \
             /bin/bash /mnt/DroneSwarm/builder/build.sh
 
       - name: Upload Image
