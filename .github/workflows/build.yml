@@ -1,7 +1,7 @@
-name: DroneSwarm Image
+name: DroneSwarm Build
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   push:
     branches: [ main ]
 
@@ -14,17 +14,19 @@ jobs:
         with:
           path: DroneSwarm
 
-      - name: Run Build Script in Docker
+      - name: Install Build Tools
         run: |
-          docker run --privileged \
-            -v /dev:/dev \
-            -v ${GITHUB_WORKSPACE}:/mnt \
-            -e TRAVIS_TAG=${{ github.ref_name }} \
-            copterexpress/image-builder:v0.12 \
-            /bin/bash /mnt/DroneSwarm/builder/build.sh
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support kpartx wget unzip
+
+      - name: Run Build Script
+        run: |
+          sudo bash DroneSwarm/builder/build.sh
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
-          name: clover-droneswarm-image
+          name: clover-droneswarm-native
           path: images/*.img
