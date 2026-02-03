@@ -58,6 +58,6 @@ def swarm_land():
         if not get_telemetry().armed:
             return True
         if (rospy.get_time() - start_time) > 10:
-            arming(False) # Принудительный дизарм
+            arming(False) 
             return False
         rospy.sleep(0.2)
