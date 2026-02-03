@@ -27,8 +27,41 @@ jobs:
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
-      - name: Upload Image
-        uses: actions/upload-artifact@v4
+      - name: Get Release Tag
+        id: get_tag
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "TAG_NAME=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_NAME=$(date +'%Y%m%d')-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rename Image with Tag
+        run: |
+          cd images
+          for img in *.img; do
+            if [ -f "$img" ]; then
+              new_name="${img%.*}-${{ steps.get_tag.outputs.TAG_NAME }}.img"
+              echo "Renaming $img to $new_name"
+              mv "$img" "$new_name"
+            fi
+          done
+
+      - name: Create ZIP Archive
+        run: |
+          cd images
+          for img in *.img; do
+            if [ -f "$img" ]; then
+              zip_name="${img%.*}.zip"
+              echo "Creating $zip_name from $img"
+              zip "$zip_name" "$img"
+            fi
+          done
+
+      - name: Upload Images and ZIP to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
         with:
-          name: clover-droneswarm-native
-          path: images/*.img
+          files: |
+            images/*.img
+            images/*.zip
