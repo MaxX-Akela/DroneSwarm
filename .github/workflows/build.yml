@@ -1,0 +1,30 @@
+name: DroneSwarm Image
+
+on:
+  workflow_dispatch: 
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout DroneSwarm
+        uses: actions/checkout@v4
+        with:
+          path: DroneSwarm
+
+      - name: Run Build Script in Docker
+        run: |
+          docker run --privileged \
+            -v /dev:/dev \
+            -v ${GITHUB_WORKSPACE}:/mnt \
+            -e TRAVIS_TAG=${{ github.ref_name }} \
+            ghcr.io/copterexpress/image-builder:latest \
+            /bin/bash /mnt/DroneSwarm/builder/build.sh
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: clover-droneswarm-image
+          path: images/*.img
