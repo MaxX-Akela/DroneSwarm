@@ -20,7 +20,6 @@ jobs:
             -v /dev:/dev \
             -v ${GITHUB_WORKSPACE}:/mnt \
             -e TRAVIS_TAG=${{ github.ref_name }} \
-            ghcr.io/copterexpress/image-builder:latest \
             /bin/bash /mnt/DroneSwarm/builder/build.sh
 
       - name: Upload Image
