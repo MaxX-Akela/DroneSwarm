@@ -47,11 +47,18 @@ jobs:
           for img in *.img; do
             if [ -f "$img" ]; then
               NEW_NAME="${img%.*}-${TAG}.img"
-              echo "Processing $img -> $NEW_NAME"
-              mv "$img" "$NEW_NAME"
-              zip "${NEW_NAME%.*}.zip" "$NEW_NAME"
+              echo "Zipping $NEW_NAME..."
+              zip -9 "${NEW_NAME%.*}.zip" "$img"
+              
+              rm "$img" 
             fi
           done
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: images/*.zip
 
       - name: Upload to Release
         if: github.event_name == 'release'
