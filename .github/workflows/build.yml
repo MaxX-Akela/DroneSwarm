@@ -27,6 +27,7 @@ jobs:
       - name: Run Build Script
         run: |
           sudo bash DroneSwarm/builder/build.sh
+          sudo chown -R $USER:$USER images/
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
@@ -39,12 +40,14 @@ jobs:
             echo "TAG_NAME=$(date +'%Y%m%d')-dev" >> $GITHUB_OUTPUT
           fi
 
-      - name: Process Images
+      - name: Process and Zip Images
         run: |
           cd images
+          TAG="${{ steps.get_tag.outputs.TAG_NAME }}"
           for img in *.img; do
             if [ -f "$img" ]; then
-              NEW_NAME="${img%.*}-${{ steps.get_tag.outputs.TAG_NAME }}.img"
+              NEW_NAME="${img%.*}-${TAG}.img"
+              echo "Processing $img -> $NEW_NAME"
               mv "$img" "$NEW_NAME"
               zip "${NEW_NAME%.*}.zip" "$NEW_NAME"
             fi
