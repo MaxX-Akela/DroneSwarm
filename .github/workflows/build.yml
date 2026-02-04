@@ -7,6 +7,9 @@ on:
   release:
     types: [ created ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,7 +22,7 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support kpartx wget unzip
+          sudo apt-get install -y qemu-user-static binfmt-support kpartx wget unzip zip
 
       - name: Run Build Script
         run: |
@@ -36,29 +39,18 @@ jobs:
             echo "TAG_NAME=$(date +'%Y%m%d')-dev" >> $GITHUB_OUTPUT
           fi
 
-      - name: Rename Image with Tag
+      - name: Process Images
         run: |
           cd images
           for img in *.img; do
             if [ -f "$img" ]; then
-              new_name="${img%.*}-${{ steps.get_tag.outputs.TAG_NAME }}.img"
-              echo "Renaming $img to $new_name"
-              mv "$img" "$new_name"
+              NEW_NAME="${img%.*}-${{ steps.get_tag.outputs.TAG_NAME }}.img"
+              mv "$img" "$NEW_NAME"
+              zip "${NEW_NAME%.*}.zip" "$NEW_NAME"
             fi
           done
 
-      - name: Create ZIP Archive
-        run: |
-          cd images
-          for img in *.img; do
-            if [ -f "$img" ]; then
-              zip_name="${img%.*}.zip"
-              echo "Creating $zip_name from $img"
-              zip "$zip_name" "$img"
-            fi
-          done
-
-      - name: Upload Images and ZIP to Release
+      - name: Upload to Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
