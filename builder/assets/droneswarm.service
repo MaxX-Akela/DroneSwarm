@@ -5,7 +5,8 @@ After=network.target clover.service
 [Service]
 Type=simple
 User=pi
-ExecStart=/usr/bin/python3 /home/pi/droneswarm/drone_client/client.py
+WorkingDirectory=/home/pi/DroneSwarm/drone
+ExecStart=/usr/bin/python3 /home/pi/DroneSwarm/drone/client.py
 Restart=always
 RestartSec=5
 

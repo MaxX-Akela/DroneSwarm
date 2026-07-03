@@ -7,6 +7,7 @@ REPO_DIR="${BASE_DIR}/DroneSwarm"
 IMAGES_DIR="${BASE_DIR}/images"
 TARGET_DIR="/home/pi/DroneSwarm"
 SERVICE_FILE="builder/assets/droneswarm.service"
+CHRONY_CONF="builder/assets/chrony-drone.conf"
 
 mkdir -p ${IMAGES_DIR}
 IMAGE_PATH="${IMAGES_DIR}/clover_droneswarm.img"
@@ -49,8 +50,15 @@ sudo chroot ${MOUNT_POINT} /usr/bin/qemu-arm-static /bin/bash -c "
     export LC_ALL=C
     export DEBIAN_FRONTEND=noninteractive
     apt-get update --allow-releaseinfo-change
-    # apt-get install -y chrony
+    apt-get install -y chrony
 "
+
+if [ -f "${REPO_DIR}/${CHRONY_CONF}" ]; then
+    sudo cp "${REPO_DIR}/${CHRONY_CONF}" "${MOUNT_POINT}/etc/chrony/chrony.conf"
+    sudo chroot ${MOUNT_POINT} /usr/bin/qemu-arm-static /bin/bash -c "systemctl enable chrony"
+else
+    echo "Warning: chrony config ${CHRONY_CONF} not found!"
+fi
 
 echo "Unmounting"
 sudo umount ${MOUNT_POINT}/boot

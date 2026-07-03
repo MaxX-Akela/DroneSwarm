@@ -1,241 +1,372 @@
+import os
 import sys
-import json
-import socket
-import struct
-import selectors
-import threading
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, 
-    QHBoxLayout, QWidget, QPushButton, QCheckBox, QHeaderView, QMenu, QAction,
-    QColorDialog, QMessageBox, QFileDialog
-)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+import time
+
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QTextEdit, QMessageBox, QLabel, QGroupBox,
+                             QAbstractItemView, QDoubleSpinBox, QCheckBox, QFormLayout,
+                             QPlainTextEdit, QDialog, QDialogButtonBox, QMenuBar)
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 
-TCP_PORT = 8888
-UDP_PORT = 9999
-BROADCAST_INTERVAL = 2.0
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-class NetworkWorker(QThread):
-    new_client_signal = pyqtSignal(str, str)  
-    telemetry_signal = pyqtSignal(str, dict) 
-    client_disconnected_signal = pyqtSignal(str)
+from modules.config import config
+from modules.network import NetworkManager
 
+COLUMNS = [
+    "copter ID", "version", "animation ID", "battery", "system", "sensors",
+    "mode", "checks", "current x y z yaw frame_id", "start x y z", "dt",
+]
+
+OK_COLOR = QColor("#ccffcc")
+WARN_COLOR = QColor("#ffe0a3")
+FAIL_COLOR = QColor("#ff9999")
+
+
+class ConfigEditorDialog(QDialog):
+    def __init__(self, parent=None, initial_text=""):
+        super().__init__(parent)
+        self.setWindowTitle("Send config to selected drones")
+        self.resize(500, 400)
+        layout = QVBoxLayout(self)
+        self.editor = QPlainTextEdit(self)
+        self.editor.setPlainText(initial_text)
+        layout.addWidget(self.editor)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def text(self):
+        return self.editor.toPlainText()
+
+
+class DroneDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.sel = selectors.DefaultSelector()
-        self.clients = {} 
-        self.running = True
+        self.setWindowTitle("DroneSwarm")
+        self.resize(1400, 700)
 
-    def get_local_ip(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(('8.8.8.8', 80))
-            ip = s.getsockname()[0]
-        except: ip = '127.0.0.1'
-        finally: s.close()
-        return ip
+        self.drones = {}   
+        self.row_of = {}   
+        self._last_config_text = self._load_default_config_text()
 
-    def run(self):
-        threading.Thread(target=self.udp_beacon, daemon=True).start()
-
-        lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        lsock.bind(('0.0.0.0', TCP_PORT))
-        lsock.listen()
-        lsock.setblocking(False)
-        self.sel.register(lsock, selectors.EVENT_READ, data=self.accept_wrapper)
-
-        while self.running:
-            events = self.sel.select(timeout=0.1)
-            for key, mask in events:
-                callback = key.data
-                callback(key.fileobj, mask)
-
-    def udp_beacon(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        msg = json.dumps({"ip": self.get_local_ip(), "port": TCP_PORT}).encode('utf-8')
-        while self.running:
-            try:
-                sock.sendto(msg, ('<broadcast>', UDP_PORT))
-                self.msleep(int(BROADCAST_INTERVAL * 1000))
-            except: pass
-
-    def accept_wrapper(self, sock, mask):
-        conn, addr = sock.accept()
-        conn.setblocking(False)
-        drone_id = f"Drone_{addr[1]}"
-        self.clients[conn] = drone_id
-        self.sel.register(conn, selectors.EVENT_READ, data=self.read_handler)
-        self.new_client_signal.emit(addr[0], drone_id)
-
-    def read_handler(self, conn, mask):
-        try:
-            header = conn.recv(4)
-            if not header: raise Exception("Closed")
-            msg_len = struct.unpack('!I', header)[0]
-            data = conn.recv(msg_len)
-            msg = json.loads(data.decode('utf-8'))
-            self.telemetry_signal.emit(self.clients[conn], msg)
-        except:
-            self.client_disconnected_signal.emit(self.clients[conn])
-            self.sel.unregister(conn)
-            conn.close()
-            del self.clients[conn]
-
-    def send_to_client(self, drone_id, data):
-        for sock, d_id in self.clients.items():
-            if d_id == drone_id:
-                body = json.dumps(data).encode('utf-8')
-                header = struct.pack('!I', len(body))
-                try: sock.sendall(header + body)
-                except: pass
-
-class DroneSwarmServer(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("DroneSwarm Control Center")
-        self.resize(1200, 600)
-        
-        self.drones = {}
-        
+        self.init_menu()
         self.init_ui()
-        self.init_network()
 
-    def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QHBoxLayout(main_widget)
-
-        self.table = QTableWidget()
-        self.headers = [
-            "ID", "Version", "Config", "Animation ID", "Battery", 
-            "System", "Sensors", "Mode", "Checks", "Position", "Start Pos", "dt"
-        ]
-        self.table.setColumnCount(len(self.headers))
-        self.table.setHorizontalHeaderLabels(self.headers)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.table, 4)
-
-        btn_layout = QVBoxLayout()
-        
-        self.btn_takeoff = QPushButton("Takeoff")
-        self.btn_land = QPushButton("Land")
-        self.btn_color = QPushButton("Set LED Color")
-        self.btn_reboot = QPushButton("Reboot FCU")
-        self.btn_disarm = QPushButton("Disarm")
-
-        for b in [self.btn_takeoff, self.btn_land, self.btn_color, self.btn_reboot, self.btn_disarm]:
-            btn_layout.addWidget(b)
-            b.setMinimumHeight(40)
-
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout, 1)
-
-        self.btn_takeoff.clicked.connect(lambda: self.broadcast_command({"action": "takeoff"}))
-        self.btn_land.clicked.connect(lambda: self.broadcast_command({"action": "land"}))
-        self.btn_reboot.clicked.connect(lambda: self.broadcast_command({"action": "reboot_fcu"}))
-        self.btn_color.clicked.connect(self.choose_color)
-
-        
-        self.create_menus()
-
-    def create_menus(self):
-        menubar = self.menuBar()
-        
-        selected_menu = menubar.addMenu("Selected drones")
-        
-        send_sub = selected_menu.addMenu("Send")
-        send_sub.addAction("Animations")
-        send_sub.addAction("Configuration")
-        send_sub.addAction("File")
-        
-        restart_sub = selected_menu.addMenu("Restart Service")
-        restart_sub.addAction("chrony")
-        restart_sub.addAction("clever")
-        restart_sub.addAction("drone_swarm")
-        
-        server_menu = menubar.addMenu("Server")
-        server_menu.addAction("Edit server config")
-        server_menu.addAction("Restart server")
-
-    def init_network(self):
-        self.network = NetworkWorker()
-        self.network.new_client_signal.connect(self.add_drone)
-        self.network.telemetry_signal.connect(self.update_telemetry)
+        self.network = NetworkManager()
+        self.network.telemetry_received.connect(self.on_telemetry)
+        self.network.drone_disconnected.connect(self.on_drone_disconnected)
+        self.network.log_message.connect(self.log)
         self.network.start()
 
-    def add_drone(self, ip, drone_id):
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        
-        item_id = QTableWidgetItem(drone_id)
-        item_id.setFlags(item_id.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
-        item_id.setCheckState(Qt.Unchecked)
-        self.table.setItem(row, 0, item_id)
+        self.stale_timer = QTimer(self)
+        self.stale_timer.timeout.connect(self.check_stale)
+        self.stale_timer.start(1000)
 
-        for i in range(1, len(self.headers)):
-            item = QTableWidgetItem("N/A")
-            item.setBackground(QColor(255, 255, 0)) # Yellow
-            self.table.setItem(row, i, item)
-            
-        self.drones[drone_id] = {"row": row}
+    @staticmethod
+    def _load_default_config_text():
+        example = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                                "drone", "config.example.ini")
+        try:
+            with open(example, "r", encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return ""
 
-    def update_telemetry(self, drone_id, data):
-        if drone_id not in self.drones: return
-        row = self.drones[drone_id]["row"]
-        
-        self.update_cell(row, 4, f"{data.get('bat_v', 0)}V ({data.get('bat_p', 0)}%)", self.validate_battery(data))
-        self.update_cell(row, 5, data.get('state', 'UNKNOWN'), data.get('state') == 'STANDBY')
-        self.update_cell(row, 7, data.get('mode', 'NONE'), 'CMODE' not in data.get('mode', ''))
-        self.update_cell(row, 8, "OK", True) 
+    def init_menu(self):
+        menubar = self.menuBar()
 
-    def update_cell(self, row, col, text, is_valid):
-        item = self.table.item(row, col)
-        if not item: return
-        item.setText(text)
-        color = QColor(0, 255, 0) if is_valid else QColor(255, 0, 0) # Green / Red
-        item.setBackground(color)
+        selected_menu = menubar.addMenu("Selected drones")
+        selected_menu.addAction("Send config...", self.send_config_dialog)
+        selected_menu.addAction("Reload animation", lambda: self.send_to_selected("reload_animation"))
 
-    def validate_battery(self, data):
-        return data.get('bat_p', 0) > 20 
+        server_menu = menubar.addMenu("Server")
+        server_menu.addAction("Restart networking", self.restart_networking)
 
-    def choose_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            cmd = {
-                "action": "set_color",
-                "r": color.red(), "g": color.green(), "b": color.blue()
-            }
-            self.broadcast_command(cmd)
+        table_menu = menubar.addMenu("Table")
+        table_menu.addAction("Select all", lambda: self.table.selectAll())
+        table_menu.addAction("Deselect all", lambda: self.table.clearSelection())
 
-    def broadcast_command(self, cmd):
-        for i in range(self.table.rowCount()):
-            item = self.table.item(i, 0)
-            if item.checkState() == Qt.Checked:
-                drone_id = item.text()
-                self.network.send_to_client(drone_id, cmd)
+    def init_ui(self):
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
 
-    def validate_drone_status(self, row, data):
-        bat_ok = data.get('bat_p', 0) > 20 
-        self.update_cell(row, 4, f"{data['bat_v']}V ({data['bat_p']}%)", bat_ok)
-    
-        sys_ok = data.get('system') == "STANDBY"
-        self.update_cell(row, 5, data.get('system'), sys_ok)
-    
-        mode = data.get('state', 'UNKNOWN')
-        mode_ok = mode != "NO_FCU" and "CMODE" not in mode
-        self.update_cell(row, 7, mode, mode_ok)
-    
-        checks_ok = data.get('checks') == "OK"
-        self.update_cell(row, 8, data.get('checks'), checks_ok)
-    
-        is_ready_to_fly = all([bat_ok, sys_ok, mode_ok, checks_ok])
-        self.set_row_readiness(row, is_ready_to_fly)
+        sidebar_layout = QVBoxLayout()
+        sidebar_layout.setContentsMargins(0, 0, 10, 0)
 
-if __name__ == '__main__':
+        control_group = QGroupBox("Команды управления")
+        control_vbox = QVBoxLayout(control_group)
+
+        timing_form = QFormLayout()
+        self.start_after = QDoubleSpinBox()
+        self.start_after.setSuffix(" s")
+        self.start_after.setRange(0, 3600)
+        timing_form.addRow("Start after", self.start_after)
+        self.music_after = QDoubleSpinBox()
+        self.music_after.setSuffix(" s")
+        self.music_after.setRange(0, 3600)
+        timing_form.addRow("Music after", self.music_after)
+        self.play_music = QCheckBox("Play music")
+        timing_form.addRow(self.play_music)
+        control_vbox.addLayout(timing_form)
+
+        btn_check = QPushButton("Проверка (Preflight check)")
+        btn_takeoff = QPushButton("Взлет (Takeoff)")
+        self.takeoff_z = QDoubleSpinBox()
+        self.takeoff_z.setRange(0.1, 10)
+        self.takeoff_z.setValue(1.5)
+        self.takeoff_z.setSuffix(" m")
+        btn_start_anim = QPushButton("Start animation")
+        btn_pause = QPushButton("Pause")
+        btn_land = QPushButton("Посадка (Land selected)")
+        btn_land_all = QPushButton("Land ALL")
+        btn_emergency = QPushButton("Emergency land")
+        btn_visual_land = QPushButton("Визуальная посадка")
+        btn_disarm_all = QPushButton("Disarm ALL")
+        btn_disarm = QPushButton("Disarm selected")
+        btn_test_leds = QPushButton("Test leds")
+        btn_flip = QPushButton("Flip")
+        btn_reboot = QPushButton("Reboot FCU")
+        btn_calib_gyro = QPushButton("Calibrate gyro")
+        btn_calib_level = QPushButton("Calibrate level")
+
+        btn_takeoff.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold; padding: 10px;")
+        btn_land.setStyleSheet("background-color: #f1c40f; color: black; font-weight: bold; padding: 10px;")
+        btn_disarm.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; padding: 10px;")
+
+        btn_check.clicked.connect(lambda: self.send_to_selected("check"))
+        btn_start_anim.clicked.connect(self.start_animation_selected)
+        btn_pause.clicked.connect(lambda: self.send_to_selected("stop"))
+        btn_takeoff.clicked.connect(self.takeoff_selected)
+        btn_land.clicked.connect(lambda: self.send_to_selected("land"))
+        btn_land_all.clicked.connect(lambda: self.send_to_all("land"))
+        btn_emergency.clicked.connect(self.emergency_land_all)
+        btn_visual_land.clicked.connect(self.visual_land_stub)
+        btn_disarm_all.clicked.connect(self.disarm_all)
+        btn_disarm.clicked.connect(self.disarm_selected)
+        btn_test_leds.clicked.connect(lambda: self.send_to_selected("test_leds"))
+        btn_flip.clicked.connect(lambda: self.send_to_selected("flip"))
+        btn_reboot.clicked.connect(lambda: self.send_to_selected("reboot_fcu"))
+        btn_calib_gyro.clicked.connect(lambda: self.send_to_selected("calibrate_gyro"))
+        btn_calib_level.clicked.connect(lambda: self.send_to_selected("calibrate_level"))
+
+        for w in (btn_check, btn_start_anim, btn_pause, btn_land, btn_land_all,
+                  btn_emergency, btn_visual_land):
+            control_vbox.addWidget(w)
+        control_vbox.addWidget(QLabel("Z:"))
+        control_vbox.addWidget(self.takeoff_z)
+        control_vbox.addWidget(btn_takeoff)
+        control_vbox.addWidget(btn_flip)
+        for w in (btn_disarm_all, btn_disarm, btn_test_leds, btn_reboot, btn_calib_gyro, btn_calib_level):
+            control_vbox.addWidget(w)
+        control_vbox.addStretch()
+
+        sidebar_layout.addWidget(control_group)
+        main_layout.addLayout(sidebar_layout, 1)
+
+        right_layout = QVBoxLayout()
+
+        self.table = QTableWidget(0, len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        log_group = QGroupBox("Консоль сервера")
+        log_layout = QVBoxLayout(log_group)
+        self.console = QTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: monospace;")
+        log_layout.addWidget(self.console)
+
+        right_layout.addWidget(self.table, 3)
+        right_layout.addWidget(log_group, 1)
+
+        main_layout.addLayout(right_layout, 4)
+
+    def log(self, message):
+        time_str = time.strftime("%H:%M:%S")
+        self.console.append(f"[{time_str}] {message}")
+
+    def on_telemetry(self, copter_id, telemetry):
+        self.drones[copter_id] = telemetry
+        if copter_id not in self.row_of:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.row_of[copter_id] = row
+            item_id = QTableWidgetItem(copter_id)
+            item_id.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 0, item_id)
+        self.update_row(copter_id)
+
+    def on_drone_disconnected(self, copter_id):
+        if copter_id in self.drones:
+            self.drones[copter_id]["_offline"] = True
+            self.update_row(copter_id)
+
+    def check_stale(self):
+        now = time.time()
+        timeout = config.network_drone_timeout
+        for copter_id, telemetry in self.drones.items():
+            if now - telemetry.get("_last_seen", now) > timeout:
+                telemetry["_offline"] = True
+                self.update_row(copter_id)
+
+    def update_row(self, copter_id):
+        row = self.row_of.get(copter_id)
+        if row is None:
+            return
+        t = self.drones[copter_id]
+        offline = t.get("_offline", False)
+
+        system_ok = t.get("system", {}).get("ok")
+        sensors_ok = t.get("sensors", {}).get("ok")
+        checks = t.get("checks", {})
+        checks_ok = checks.get("ok")
+
+        values = {
+            1: t.get("version", "?"),
+            2: t.get("animation_id") or "-",
+            3: f"{t.get('bat', 0.0):.1f}V",
+            4: "OK" if system_ok else ("FAIL" if system_ok is not None else "?"),
+            5: "OK" if sensors_ok else ("FAIL" if sensors_ok is not None else "?"),
+            6: t.get("mode", "?"),
+            7: "OK" if checks_ok else ("FAIL" if checks_ok is not None else "?"),
+            8: "{:.2f} {:.2f} {:.2f} {:.2f} {}".format(
+                t.get("x", 0.0), t.get("y", 0.0), t.get("z", 0.0), t.get("yaw", 0.0), t.get("frame_id", "")),
+            9: "{:.2f} {:.2f} {:.2f}".format(*(t.get("start_pos") or [0.0, 0.0, 0.0])) if t.get("start_pos") else "",
+            10: "{:.3f}".format(t.get("time_offset", {}).get("offset_sec", 0.0)),
+        }
+
+        if offline:
+            color = FAIL_COLOR
+        elif system_ok and sensors_ok and checks_ok:
+            color = OK_COLOR
+        elif system_ok is None and sensors_ok is None and checks_ok is None:
+            color = None
+        else:
+            color = WARN_COLOR
+
+        for col, text in values.items():
+            item = QTableWidgetItem("OFFLINE" if offline and col == 6 else str(text))
+            item.setTextAlignment(Qt.AlignCenter)
+            if color is not None:
+                item.setBackground(color)
+            self.table.setItem(row, col, item)
+
+    def get_selected_drones(self):
+        selected_rows = set(item.row() for item in self.table.selectedItems())
+        ids = []
+        for copter_id, row in self.row_of.items():
+            if row in selected_rows:
+                ids.append(copter_id)
+        return ids
+
+    def send_to_selected(self, action, params=None):
+        selected = self.get_selected_drones()
+        if not selected:
+            QMessageBox.warning(self, "Внимание", "Выберите хотя бы одного дрона в таблице!")
+            return
+        self.network.broadcast_command(selected, action, params)
+        self.log(f"> Команда [{action}] отправлена: {', '.join(selected)}")
+
+    def send_to_all(self, action, params=None):
+        ids = list(self.row_of.keys())
+        if not ids:
+            QMessageBox.warning(self, "Внимание", "Нет подключенных дронов!")
+            return
+        self.network.broadcast_command(ids, action, params)
+        self.log(f"> Команда [{action}] отправлена всем ({len(ids)})")
+
+    def takeoff_selected(self):
+        selected = self.get_selected_drones()
+        if not selected:
+            return QMessageBox.warning(self, "Внимание", "Дроны не выбраны!")
+
+        reply = QMessageBox.question(self, "Подтверждение",
+                                     f"Внимание! Выбрано {len(selected)} дронов для ВЗЛЕТА.\nПродолжить?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.network.broadcast_command(selected, "takeoff", {"height": self.takeoff_z.value()})
+
+    def start_animation_selected(self):
+        selected = self.get_selected_drones()
+        if not selected:
+            return QMessageBox.warning(self, "Внимание", "Дроны не выбраны!")
+        if self.play_music.isChecked():
+            self.log("Play music включен, но воспроизведение музыки не реализовано в этой версии сервера")
+        start_time = time.time() + self.start_after.value()
+        self.network.broadcast_command(selected, "play", {"start_time": start_time})
+        self.log(f"> Старт анимации через {self.start_after.value():.1f}с для {', '.join(selected)}")
+
+    def disarm_selected(self):
+        selected = self.get_selected_drones()
+        if not selected:
+            return QMessageBox.warning(self, "Внимание", "Дроны не выбраны!")
+        reply = QMessageBox.critical(self, "КРИТИЧЕСКАЯ ОПЕРАЦИЯ",
+                                     "ОТКЛЮЧЕНИЕ МОТОРОВ В ПОЛЕТЕ ПРИВЕДЕТ К ПАДЕНИЮ!\nВы уверены?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.network.broadcast_command(selected, "disarm")
+
+    def disarm_all(self):
+        ids = list(self.row_of.keys())
+        if not ids:
+            return QMessageBox.warning(self, "Внимание", "Нет подключенных дронов!")
+        reply = QMessageBox.critical(self, "КРИТИЧЕСКАЯ ОПЕРАЦИЯ",
+                                     "ОТКЛЮЧЕНИЕ МОТОРОВ У ВСЕХ ДРОНОВ В ПОЛЕТЕ ПРИВЕДЕТ К ПАДЕНИЮ!\nВы уверены?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.network.broadcast_command(ids, "disarm")
+
+    def emergency_land_all(self):
+        ids = list(self.row_of.keys())
+        if not ids:
+            return QMessageBox.warning(self, "Внимание", "Нет подключенных дронов!")
+        reply = QMessageBox.critical(self, "Аварийная посадка",
+                                     f"Посадить ВСЕ дроны ({len(ids)}) немедленно?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.network.broadcast_command(ids, "land")
+
+    def visual_land_stub(self):
+        self.log("Визуальная посадка не реализована в этой версии сервера")
+        QMessageBox.information(self, "Визуальная посадка", "Эта функция пока не реализована.")
+
+    def send_config_dialog(self):
+        selected = self.get_selected_drones()
+        if not selected:
+            return QMessageBox.warning(self, "Внимание", "Дроны не выбраны!")
+        dialog = ConfigEditorDialog(self, self._last_config_text)
+        if dialog.exec_() == QDialog.Accepted:
+            text = dialog.text()
+            self._last_config_text = text
+            self.network.broadcast_command(selected, "set_config", {"ini_text": text})
+            self.log(f"Конфиг отправлен: {', '.join(selected)}")
+
+    def restart_networking(self):
+        self.network.stop()
+        self.network = NetworkManager()
+        self.network.telemetry_received.connect(self.on_telemetry)
+        self.network.drone_disconnected.connect(self.on_drone_disconnected)
+        self.network.log_message.connect(self.log)
+        self.network.start()
+        self.log("Сеть перезапущена")
+
+    def closeEvent(self, event):
+        self.network.stop()
+        event.accept()
+
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = DroneSwarmServer()
+    app.setStyle("Fusion")
+
+    window = DroneDashboard()
     window.show()
     sys.exit(app.exec_())

@@ -33,12 +33,18 @@ jobs:
 
       - name: Get Release Tag
         id: get_tag
+        env:
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "TAG_NAME=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            RAW_NAME="${RELEASE_NAME:-$RELEASE_TAG}"
           else
-            echo "TAG_NAME=$(date +'%Y%m%d')-dev" >> $GITHUB_OUTPUT
+            RAW_NAME="$(date +'%Y%m%d')-dev"
           fi
+          # Release titles can contain spaces/slashes/etc.; make it filename-safe.
+          SAFE_NAME=$(printf '%s' "$RAW_NAME" | tr -d '\\/:*?"<>|' | tr -s '[:space:]' '-' | sed -E 's/^-+|-+$//g')
+          echo "TAG_NAME=$SAFE_NAME" >> $GITHUB_OUTPUT
 
       - name: Process and Zip Images
         run: |

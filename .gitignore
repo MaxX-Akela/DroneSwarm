@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+drone/drone.ini
+server/server.ini
+images/
+.vscode/
+.claude/
