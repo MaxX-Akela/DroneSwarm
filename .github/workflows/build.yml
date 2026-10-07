@@ -1,9 +1,6 @@
 name: DroneSwarm Build
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
   release:
     types: [ created ]
 
@@ -37,11 +34,7 @@ jobs:
           RELEASE_NAME: ${{ github.event.release.name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            RAW_NAME="${RELEASE_NAME:-$RELEASE_TAG}"
-          else
-            RAW_NAME="$(date +'%Y%m%d')-dev"
-          fi
+          RAW_NAME="${RELEASE_NAME:-$RELEASE_TAG}"
           # Release titles can contain spaces/slashes/etc.; make it filename-safe.
           SAFE_NAME=$(printf '%s' "$RAW_NAME" | tr -d '\\/:*?"<>|' | tr -s '[:space:]' '-' | sed -E 's/^-+|-+$//g')
           echo "TAG_NAME=$SAFE_NAME" >> $GITHUB_OUTPUT
@@ -55,21 +48,12 @@ jobs:
               NEW_NAME="${img%.*}-${TAG}.img"
               echo "Zipping $NEW_NAME..."
               zip -9 "${NEW_NAME%.*}.zip" "$img"
-              
-              rm "$img" 
+
+              rm "$img"
             fi
           done
 
       - name: Upload to Release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: images/*.zip
-
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            images/*.img
-            images/*.zip
