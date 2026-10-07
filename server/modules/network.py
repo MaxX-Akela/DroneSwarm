@@ -27,6 +27,7 @@ class NetworkManager(QObject):
 
         self._connections_lock = threading.Lock()
         self.connections = {}
+        self._send_lock = threading.Lock()
 
     def start(self):
         threading.Thread(target=self._discovery_loop, daemon=True).start()
@@ -82,6 +83,7 @@ class NetworkManager(QObject):
     def _handle_drone_connection(self, sock, addr):
         copter_id = None
         try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             raw_len = self._recv_exact(sock, 4)
             if not raw_len:
                 return
@@ -133,7 +135,8 @@ class NetworkManager(QObject):
             return False
         data = json.dumps({"action": action, "params": params or {}}).encode("utf-8")
         try:
-            sock.sendall(struct.pack("!I", len(data)) + data)
+            with self._send_lock:
+                sock.sendall(struct.pack("!I", len(data)) + data)
             return True
         except OSError as e:
             logger.warning("Failed to send '%s' to %s: %s", action, copter_id, e)

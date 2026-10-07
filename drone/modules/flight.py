@@ -40,12 +40,27 @@ def _interrupted(interrupter):
 
 
 def navto(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
-          auto_arm=False, tolerance=TOLERANCE, timeout=FLIGHT_TIMEOUT, interrupter=None):
+          auto_arm=False, interrupter=None):
+    """Non-blocking: publish the setpoint and return immediately.
+
+    For animation frames, where playback timing is driven by the frame
+    schedule itself, not by waiting for the copter to arrive.
+    """
     try:
         res = navigate(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id, auto_arm=auto_arm)
-        if not res.success:
-            return False
+        return bool(res.success)
     except rospy.ServiceException:
+        return False
+
+
+def reach_point(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
+                 auto_arm=False, tolerance=TOLERANCE, timeout=FLIGHT_TIMEOUT, interrupter=None):
+    """Blocking: publish the setpoint and wait until it's reached (or timeout/interrupt).
+
+    For takeoff and standalone commands that must confirm arrival.
+    """
+    if not navto(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id,
+                 auto_arm=auto_arm, interrupter=interrupter):
         return False
 
     start_time = rospy.get_time()
@@ -68,8 +83,11 @@ def navto(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
     return False
 
 
+navto_wait = reach_point
+
+
 def stop(frame_id="body", speed=SPEED, interrupter=None):
-    return navto(frame_id=frame_id, speed=speed, yaw=float("nan"), interrupter=interrupter)
+    return reach_point(frame_id=frame_id, speed=speed, yaw=float("nan"), interrupter=interrupter)
 
 
 def takeoff(height=Z_TAKEOFF, frame_id="body", timeout_takeoff=TAKEOFF_TIMEOUT,
@@ -104,7 +122,7 @@ def takeoff(height=Z_TAKEOFF, frame_id="body", timeout_takeoff=TAKEOFF_TIMEOUT,
 
 def land(z=0, descend=False, timeout_land=LAND_TIMEOUT, frame_id_land=FRAME_ID, interrupter=None):
     if descend:
-        navto(z=z, frame_id=frame_id_land, interrupter=interrupter)
+        reach_point(z=z, frame_id=frame_id_land, interrupter=interrupter)
 
     try:
         land_srv()

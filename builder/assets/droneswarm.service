@@ -1,12 +1,14 @@
 [Unit]
 Description=DroneSwarm Client Service
-After=network.target clover.service
+After=network.target clover.service roscore.service
+Wants=clover.service
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/DroneSwarm/drone
-ExecStart=/usr/bin/python3 /home/pi/DroneSwarm/drone/client.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -c '. /opt/ros/noetic/setup.bash; . /home/pi/catkin_ws/devel/setup.bash; exec /usr/bin/python3 /home/pi/DroneSwarm/drone/client.py'
 Restart=always
 RestartSec=5
 

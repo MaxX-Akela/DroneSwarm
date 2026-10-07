@@ -114,6 +114,7 @@ class NetworkManager:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect((server_ip, tcp_port))
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     self._send_framed(sock, {"type": "hello", "copter_id": self.copter_id})
                     logger.info("Connected to server %s", server_ip)
                     while self.running and not rospy.is_shutdown():

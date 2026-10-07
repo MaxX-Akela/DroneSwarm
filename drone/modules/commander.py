@@ -11,19 +11,44 @@ logger = logging.getLogger(__name__)
 
 ANIMATION_PATH = "animation.csv"
 
+# Backstop for do_action(): normally task_stopped is set by the worker almost
+# immediately after interrupter is set, since every blocking wait loop in
+# flight/animation checks it every 0.05-0.2s. This timeout only protects
+# against a stuck task that never checks the interrupter.
+INTERRUPT_TIMEOUT = 2.0
+
+def wait(deadline, interrupter, interval=0.05):
+    """Block until the absolute rospy time `deadline`, or interrupter is set.
+
+    Returns True if the deadline was reached, False if interrupted.
+    """
+    while not rospy.is_shutdown():
+        remaining = deadline - rospy.get_time()
+        if remaining <= 0:
+            return True
+        if interrupter.is_set():
+            return False
+        rospy.sleep(min(interval, remaining))
+    return False
+
+
 class TaskManager:
 
     def __init__(self, animation_path=ANIMATION_PATH):
         self.animation = animation.Animation(filepath=animation_path, config=config)
         self.current_task = None
         self.interrupter = threading.Event()
+        self.task_stopped = threading.Event()
+        self.task_stopped.set()
 
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
 
     def do_action(self, action_name, **kwargs):
         self.interrupter.set()
-        rospy.sleep(0.3)
+        if not self.task_stopped.wait(timeout=INTERRUPT_TIMEOUT):
+            logger.warning("Previous task '%s' didn't stop in %.1fs, proceeding anyway",
+                            action_name, INTERRUPT_TIMEOUT)
         self.interrupter.clear()
         self.current_task = (action_name, kwargs)
 
@@ -34,10 +59,13 @@ class TaskManager:
                 self.current_task = None
                 kwargs["interrupter"] = self.interrupter
 
+                self.task_stopped.clear()
                 try:
                     self._dispatch(action, kwargs)
                 except Exception as e:
                     logger.error("Action '%s' failed: %s", action, e)
+                finally:
+                    self.task_stopped.set()
 
             rospy.sleep(0.1)
 
@@ -45,7 +73,7 @@ class TaskManager:
         if action == "takeoff":
             flight.takeoff(**kwargs)
         elif action == "navto":
-            flight.navto(**kwargs)
+            flight.reach_point(**kwargs)
         elif action == "land":
             flight.land(**kwargs)
         elif action == "stop":
@@ -82,14 +110,15 @@ class TaskManager:
 
         if start_time is not None:
             offset = network.get_time_offset()["offset_sec"]
-            deadline = rospy.get_time() + (start_time - network.corrected_now(offset))
-            while rospy.get_time() < deadline:
-                if interrupter.is_set():
-                    return
-                rospy.sleep(0.05)
+            task_start_time = rospy.get_time() + (start_time - network.corrected_now(offset))
+            if not wait(task_start_time, interrupter):
+                return
+        else:
+            task_start_time = rospy.get_time()
 
+        elapsed = 0.0
         for frame in self.animation.get_output_frames(run_action):
-            if interrupter.is_set():
+            if not wait(task_start_time + elapsed, interrupter):
                 return
             animation.execute_frame(frame, self.animation.config, interrupter=interrupter)
-            rospy.sleep(frame.delay)
+            elapsed += frame.delay
