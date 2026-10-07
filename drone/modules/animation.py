@@ -413,22 +413,21 @@ class Animation:
 def execute_frame(frame, config, interrupter=interrupt_event):
     auto_arm = False
     use_leds = config.led_use
-    f_id = config.flight_frame_id
     
     if frame.action == 'takeoff':
         use_leds &= config.led_takeoff_indication
-        takeoff(z=config.flight_takeoff_height, frame_id=f_id, timeout=config.flight_takeoff_time, use_leds=use_leds, interrupter=interrupter)
+        takeoff(z=config.flight_takeoff_height, timeout=config.flight_takeoff_time, use_leds=use_leds, interrupter=interrupter)
         return
     
     if frame.action == 'land':
         use_leds &= config.led_land_indication
-        land(frame_id=f_id, timeout=config.flight_land_timeout, use_leds=use_leds, interrupter=interrupter)
+        land(timeout=config.flight_land_timeout, use_leds=use_leds, interrupter=interrupter)
         return
     
-    if frame.action in ('fly', 'arm'):
+    if frame.action in ('fly', 'arm', 'reach'):
         auto_arm = (frame.action == 'arm')
         if frame.pose_is_valid():
-            flight.navto(x=frame.x, y=frame.y, z=frame.z, yaw=frame.yaw, frame_id=f_id, auto_arm=auto_arm, interrupter=interrupter)
+            flight.navto(x=frame.x, y=frame.y, z=frame.z, yaw=frame.yaw, auto_arm=auto_arm, interrupter=interrupter)
         else:
             logger.error("Frame pose is not valid for flying")
             
@@ -442,24 +441,24 @@ def execute_frame(frame, config, interrupter=interrupt_event):
 def turn_off_led(interrupter=interrupt_event):
     led.set_effect(r=0, g=0, b=0)
 
-def takeoff(z=1.5, safe_takeoff=False, frame_id='map', timeout=5.0, use_leds=True, interrupter=interrupt_event):
+def takeoff(z=1.5, safe_takeoff=False, timeout=5.0, use_leds=True, interrupter=interrupt_event):
     if use_leds:
         led.set_effect(effect='wipe', r=255, g=0, b=0)
     
-    result = flight.takeoff(height=z, timeout_takeoff=timeout, frame_id=frame_id, emergency_land=safe_takeoff, interrupter=interrupter)
+    result = flight.takeoff(height=z, timeout_takeoff=timeout, emergency_land=safe_takeoff, interrupter=interrupter)
     
-    if result == 'not armed':
-        raise Exception('STOP')
+    if not result:
+        logger.error("Takeoff failed")
     
     if use_leds:
         led.set_effect(effect='blink_fast', r=0, g=255, b=0)
 
-def land(z=1.5, descend=False, timeout=5.0, frame_id='map', use_leds=True, interrupter=interrupt_event):
+def land(z=1.5, descend=False, timeout=5.0, use_leds=True, interrupter=interrupt_event):
     led.set_effect(r=0, g=0, b=0)
     if use_leds:
         led.set_effect(effect='blink_fast', r=255, g=0, b=0)
     
-    flight.land(z=z, descend=descend, timeout_land=timeout, frame_id_land=frame_id, interrupter=interrupter)
+    flight.land(z=z, descend=descend, timeout_land=timeout, interrupter=interrupter)
     
     if use_leds:
         while flight.get_telemetry_locked().armed:

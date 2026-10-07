@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import rospy
 import modules.animation as animation
@@ -9,7 +10,7 @@ from modules.config import config
 
 logger = logging.getLogger(__name__)
 
-ANIMATION_PATH = "animation.csv"
+ANIMATION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "animation.csv")
 
 # Backstop for do_action(): normally task_stopped is set by the worker almost
 # immediately after interrupter is set, since every blocking wait loop in
@@ -102,7 +103,11 @@ class TaskManager:
             logger.error("Can't play animation, state is '%s'", self.animation.state)
             return
 
-        current_height = flight.get_telemetry_locked().z
+        pose = flight.get_pose()
+        if pose is None:
+            logger.error("Can't play animation: no pose in %s (ArUco map not detected)", flight.FRAME_ID)
+            return
+        current_height = pose.z
         run_action = action or self.animation.get_start_action(current_height)
         if run_action not in ("fly", "takeoff"):
             logger.error("Can't start animation: %s", run_action)

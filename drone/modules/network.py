@@ -14,6 +14,7 @@ NTP_PORT = 123
 # NTP epoch (1900-01-01) to Unix epoch (1970-01-01), in seconds.
 NTP_UNIX_DELTA = 2208988800
 
+_CHRONY_LEAP_RE = re.compile(r"Leap status\s*:\s*(.+)")
 _CHRONY_OFFSET_RE = re.compile(r"System time\s*:\s*([\d.eE+-]+)\s*seconds\s*(fast|slow)")
 
 
@@ -25,6 +26,12 @@ def get_chrony_offset(timeout=CHRONY_TIMEOUT):
         ).stdout
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug("chronyc unavailable: %s", e)
+        return None
+
+    # chronyd with no reachable source still reports "System time: 0.0 seconds",
+    # which is not a real measurement.
+    leap = _CHRONY_LEAP_RE.search(output)
+    if not leap or leap.group(1).strip().lower().startswith("not synchronised"):
         return None
 
     match = _CHRONY_OFFSET_RE.search(output)
@@ -83,7 +90,8 @@ def get_ntp_offset(server, timeout=NTP_TIMEOUT):
 
     t2 = struct.unpack("!II", reply[32:40])[0] - NTP_UNIX_DELTA
     t3 = struct.unpack("!II", reply[40:48])[0] - NTP_UNIX_DELTA
-    return ((t2 - t1) + (t3 - t4)) / 2.0
+    # (t2 - t1) + (t3 - t4) / 2 is "server minus local"; offsets here are "local minus true".
+    return -((t2 - t1) + (t3 - t4)) / 2.0
 
 
 def get_time_offset(ntp_server=None):

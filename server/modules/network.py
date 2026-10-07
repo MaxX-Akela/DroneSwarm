@@ -1,5 +1,6 @@
 import json
 import logging
+import queue
 import socket
 import struct
 import threading
@@ -10,6 +11,43 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from modules.config import config
 
 logger = logging.getLogger(__name__)
+
+SEND_TIMEOUT = 5.0
+
+
+class DroneConnection:
+    """One drone's TCP socket plus its own sender thread, so a stuck drone
+    can't block the GUI thread or commands to the other drones."""
+
+    def __init__(self, copter_id, sock):
+        self.copter_id = copter_id
+        self.sock = sock
+        self.outbox = queue.Queue()
+        threading.Thread(target=self._send_loop, daemon=True).start()
+
+    def _send_loop(self):
+        while True:
+            data = self.outbox.get()
+            if data is None:
+                return
+            try:
+                self.sock.sendall(struct.pack("!I", len(data)) + data)
+            except OSError as e:
+                # A partial frame would corrupt the stream: drop the connection
+                # and let the drone rediscover/reconnect.
+                logger.warning("Failed to send to %s: %s", self.copter_id, e)
+                self.close()
+                return
+
+    def send(self, data):
+        self.outbox.put(data)
+
+    def close(self):
+        self.outbox.put(None)
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
 
 class NetworkManager(QObject):
@@ -27,27 +65,39 @@ class NetworkManager(QObject):
 
         self._connections_lock = threading.Lock()
         self.connections = {}
-        self._send_lock = threading.Lock()
+        self._threads = []
 
     def start(self):
-        threading.Thread(target=self._discovery_loop, daemon=True).start()
-        threading.Thread(target=self._tcp_accept_loop, daemon=True).start()
-        threading.Thread(target=self._telemetry_loop, daemon=True).start()
+        for target in (self._discovery_loop, self._tcp_accept_loop, self._telemetry_loop):
+            thread = threading.Thread(target=target, daemon=True)
+            thread.start()
+            self._threads.append(thread)
 
     def stop(self):
         self.running = False
         with self._connections_lock:
-            sockets = list(self.connections.values())
-        for sock in sockets:
-            try:
-                sock.close()
-            except OSError:
-                pass
+            conns = list(self.connections.values())
+            self.connections.clear()
+        for conn in conns:
+            conn.close()
+        # Listener sockets must be released before a restart rebinds the same ports.
+        for thread in self._threads:
+            thread.join(timeout=2.0)
+
+    def _bind(self, sock, port, what):
+        try:
+            sock.bind((self.bind_address, port))
+            return True
+        except OSError as e:
+            self.log_message.emit(f"ERROR: can't bind {what} {self.bind_address}:{port}: {e}")
+            sock.close()
+            return False
 
     def _discovery_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((self.bind_address, self.discovery_port))
+        if not self._bind(sock, self.discovery_port, "discovery"):
+            return
         sock.settimeout(1.0)
         self.log_message.emit(f"Discovery listener on {self.bind_address}:{self.discovery_port}")
         while self.running:
@@ -66,7 +116,8 @@ class NetworkManager(QObject):
     def _tcp_accept_loop(self):
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((self.bind_address, self.tcp_port))
+        if not self._bind(server_sock, self.tcp_port, "command listener"):
+            return
         server_sock.listen(16)
         server_sock.settimeout(1.0)
         self.log_message.emit(f"Command listener on {self.bind_address}:{self.tcp_port}")
@@ -82,8 +133,11 @@ class NetworkManager(QObject):
 
     def _handle_drone_connection(self, sock, addr):
         copter_id = None
+        conn = None
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            sock.settimeout(SEND_TIMEOUT)
             raw_len = self._recv_exact(sock, 4)
             if not raw_len:
                 return
@@ -96,24 +150,43 @@ class NetworkManager(QObject):
                 logger.warning("First frame from %s wasn't a hello handshake", addr)
                 return
             copter_id = hello["copter_id"]
+            conn = DroneConnection(copter_id, sock)
             with self._connections_lock:
-                self.connections[copter_id] = sock
+                old = self.connections.get(copter_id)
+                self.connections[copter_id] = conn
+            if old is not None:
+                old.close()
             self.log_message.emit(f"{copter_id} connected from {addr[0]}")
 
             while self.running:
-                chunk = sock.recv(1)
-                if not chunk:
+                # Drones only talk back with short {"type": "log"} replies.
+                try:
+                    raw_len = self._recv_exact(sock, 4)
+                    if not raw_len:
+                        break
+                    data = self._recv_exact(sock, struct.unpack("!I", raw_len)[0])
+                except socket.timeout:
+                    continue
+                if not data:
                     break
+                msg = json.loads(data.decode("utf-8"))
+                if msg.get("type") == "log":
+                    self.log_message.emit(f"[{copter_id}] {msg.get('text', '')}")
         except (OSError, ValueError, KeyError) as e:
             logger.debug("Connection from %s dropped: %s", addr, e)
         finally:
-            if copter_id:
+            if conn is not None:
                 with self._connections_lock:
-                    if self.connections.get(copter_id) is sock:
+                    current = self.connections.get(copter_id) is conn
+                    if current:
                         del self.connections[copter_id]
-                self.drone_disconnected.emit(copter_id)
-                self.log_message.emit(f"{copter_id} disconnected")
-            sock.close()
+                conn.close()
+                # A drone that reconnected already replaced this connection: it isn't offline.
+                if current and self.running:
+                    self.drone_disconnected.emit(copter_id)
+                    self.log_message.emit(f"{copter_id} disconnected")
+            else:
+                sock.close()
 
     @staticmethod
     def _recv_exact(sock, size):
@@ -127,20 +200,19 @@ class NetworkManager(QObject):
             remaining -= len(chunk)
         return b"".join(chunks)
 
+    def is_connected(self, copter_id):
+        with self._connections_lock:
+            return copter_id in self.connections
+
     def send_command(self, copter_id, action, params=None):
         with self._connections_lock:
-            sock = self.connections.get(copter_id)
-        if sock is None:
+            conn = self.connections.get(copter_id)
+        if conn is None:
             logger.warning("No connection to %s, dropping '%s'", copter_id, action)
+            self.log_message.emit(f"WARNING: нет соединения с {copter_id}, команда [{action}] не отправлена")
             return False
-        data = json.dumps({"action": action, "params": params or {}}).encode("utf-8")
-        try:
-            with self._send_lock:
-                sock.sendall(struct.pack("!I", len(data)) + data)
-            return True
-        except OSError as e:
-            logger.warning("Failed to send '%s' to %s: %s", action, copter_id, e)
-            return False
+        conn.send(json.dumps({"action": action, "params": params or {}}).encode("utf-8"))
+        return True
 
     def broadcast_command(self, copter_ids, action, params=None):
         for copter_id in copter_ids:
@@ -149,7 +221,8 @@ class NetworkManager(QObject):
     def _telemetry_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((self.bind_address, self.telemetry_port))
+        if not self._bind(sock, self.telemetry_port, "telemetry"):
+            return
         sock.settimeout(1.0)
         self.log_message.emit(f"Telemetry listener on {self.bind_address}:{self.telemetry_port}")
         while self.running:

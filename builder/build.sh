@@ -34,7 +34,8 @@ sudo mount ${MAPPER_BOOT} ${MOUNT_POINT}/boot
 sudo cp /usr/bin/qemu-arm-static ${MOUNT_POINT}/usr/bin/
 
 sudo mkdir -p ${MOUNT_POINT}${TARGET_DIR}
-sudo cp -r ${REPO_DIR}/* ${MOUNT_POINT}${TARGET_DIR}/
+# "/." (not "/*") so .git is copied too: the drone reports its branch@commit from it.
+sudo cp -a ${REPO_DIR}/. ${MOUNT_POINT}${TARGET_DIR}/
 sudo chown -R 1000:1000 ${MOUNT_POINT}${TARGET_DIR}
 
 if [ -f "${REPO_DIR}/${SERVICE_FILE}" ]; then

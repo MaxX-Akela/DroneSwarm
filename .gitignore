@@ -2,7 +2,8 @@ __pycache__/
 *.pyc
 *.log
 drone/drone.ini
-server/server.ini
+server/config/server.ini
 images/
 .vscode/
 .claude/
+drone/animation.csv

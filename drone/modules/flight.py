@@ -18,7 +18,9 @@ command_long = rospy.ServiceProxy("mavros/cmd/command", CommandLong)
 MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN = 246
 MAV_CMD_PREFLIGHT_CALIBRATION = 241
 
-FRAME_ID = "map"
+# Every flight command is expressed in the ArUco map frame, never in "map"/"body"
+# (except stop(), which only holds the current position).
+FRAME_ID = "aruco_map"
 LAND_TIMEOUT = 4
 TAKEOFF_TIMEOUT = 5
 ARM_TIMEOUT = 10
@@ -39,7 +41,21 @@ def _interrupted(interrupter):
     return interrupter is not None and interrupter.is_set()
 
 
-def navto(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
+_last_navto_error = [0.0]
+
+
+def get_pose():
+    """Telemetry in the aruco_map frame, or None if the map isn't visible (NaN pose)."""
+    try:
+        t = get_telemetry_locked(frame_id=FRAME_ID)
+    except rospy.ServiceException:
+        return None
+    if any(math.isnan(v) for v in (t.x, t.y, t.z)):
+        return None
+    return t
+
+
+def navto(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED,
           auto_arm=False, interrupter=None):
     """Non-blocking: publish the setpoint and return immediately.
 
@@ -47,19 +63,28 @@ def navto(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
     schedule itself, not by waiting for the copter to arrive.
     """
     try:
-        res = navigate(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id, auto_arm=auto_arm)
-        return bool(res.success)
-    except rospy.ServiceException:
+        res = navigate(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=FRAME_ID, auto_arm=auto_arm)
+    except rospy.ServiceException as e:
+        res = None
+        message = str(e)
+    else:
+        message = res.message
+    if res is None or not res.success:
+        now = rospy.get_time()
+        if now - _last_navto_error[0] > 2.0:
+            _last_navto_error[0] = now
+            logger.warning("navigate in %s failed: %s", FRAME_ID, message)
         return False
+    return True
 
 
-def reach_point(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
+def reach_point(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED,
                  auto_arm=False, tolerance=TOLERANCE, timeout=FLIGHT_TIMEOUT, interrupter=None):
     """Blocking: publish the setpoint and wait until it's reached (or timeout/interrupt).
 
     For takeoff and standalone commands that must confirm arrival.
     """
-    if not navto(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id,
+    if not navto(x=x, y=y, z=z, yaw=yaw, speed=speed,
                  auto_arm=auto_arm, interrupter=interrupter):
         return False
 
@@ -86,16 +111,24 @@ def reach_point(x=0, y=0, z=0, yaw=float("nan"), speed=SPEED, frame_id=FRAME_ID,
 navto_wait = reach_point
 
 
-def stop(frame_id="body", speed=SPEED, interrupter=None):
-    return reach_point(frame_id=frame_id, speed=speed, yaw=float("nan"), interrupter=interrupter)
+def stop(speed=SPEED, interrupter=None):
+    """Hold the current position: re-target the copter's own position in the aruco_map frame."""
+    pose = get_pose()
+    if pose is None:
+        logger.warning("stop: aruco_map pose unavailable")
+        return False
+    return reach_point(x=pose.x, y=pose.y, z=pose.z, speed=speed, interrupter=interrupter)
 
 
-def takeoff(height=Z_TAKEOFF, frame_id="body", timeout_takeoff=TAKEOFF_TIMEOUT,
+def takeoff(height=Z_TAKEOFF, timeout_takeoff=TAKEOFF_TIMEOUT,
             yaw=float("nan"), emergency_land=False, tolerance=TOLERANCE, interrupter=None):
     start_time = rospy.get_time()
 
+    # Takeoff is relative to the copter ("body"), so it climbs straight up from where it
+    # stands; height is then confirmed in aruco_map. navigate() with x=y=0 in a non-body
+    # frame would fly the copter to the map origin.
     try:
-        res = navigate(z=height, yaw=yaw, frame_id=frame_id, auto_arm=True)
+        res = navigate(z=height, yaw=yaw, frame_id="body", auto_arm=True)
         if not res.success:
             return False
     except rospy.ServiceException:
@@ -105,7 +138,9 @@ def takeoff(height=Z_TAKEOFF, frame_id="body", timeout_takeoff=TAKEOFF_TIMEOUT,
         if _interrupted(interrupter):
             return False
 
-        telem = get_telemetry_locked()
+        telem = get_telemetry_locked(frame_id=FRAME_ID)
+        if math.isnan(telem.z):  # map not visible: fall back to the default (local) frame
+            telem = get_telemetry_locked()
 
         if abs(telem.z - height) < tolerance:
             return True
@@ -120,9 +155,9 @@ def takeoff(height=Z_TAKEOFF, frame_id="body", timeout_takeoff=TAKEOFF_TIMEOUT,
     return False
 
 
-def land(z=0, descend=False, timeout_land=LAND_TIMEOUT, frame_id_land=FRAME_ID, interrupter=None):
+def land(z=0, descend=False, timeout_land=LAND_TIMEOUT, interrupter=None):
     if descend:
-        reach_point(z=z, frame_id=frame_id_land, interrupter=interrupter)
+        reach_point(z=z, interrupter=interrupter)
 
     try:
         land_srv()

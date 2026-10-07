@@ -1,5 +1,6 @@
 import configparser
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +11,10 @@ DEFAULTS = {
     "network_bind_address": "0.0.0.0",
     "network_drone_timeout": 5.0,
     "server_log_dir": ".",
+    # Where files sent from the server menu land on the drone.
+    "paths_camera_calibration": "/home/pi/catkin_ws/src/clover/clover/camera_info/fisheye_cam_320x240.yaml",
+    "paths_aruco_map": "/home/pi/catkin_ws/src/clover/aruco_pose/map/map.txt",
+    "paths_launch_dir": "/home/pi/catkin_ws/src/clover/clover/launch",
 }
 
 
@@ -53,4 +58,7 @@ class Config:
             raise AttributeError(name)
 
 
-config = Config()
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "config", "server.ini")
+
+config = Config(CONFIG_PATH)

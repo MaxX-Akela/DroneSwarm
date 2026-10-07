@@ -24,7 +24,6 @@ DEFAULTS = {
     "led_takeoff_indication": True,
     "led_land_indication": True,
 
-    "flight_frame_id": "map",
     "flight_takeoff_height": 1.5,
     "flight_takeoff_time": 5.0,
     "flight_land_timeout": 5.0,
@@ -32,7 +31,9 @@ DEFAULTS = {
     "flight_arming_time": 5.0,
     "flight_reach_first_point_time": 5.0,
 
+    "checks_battery_cells": 4,
     "checks_battery_min_voltage": 3.5,
+    "checks_battery_warn_voltage": 3.7,
     "checks_fcu_timeout": 3.0,
     "checks_service_timeout": 2.0,
 }
@@ -56,6 +57,9 @@ class Config:
         self._values = dict(DEFAULTS)
         if path:
             self.load(path)
+
+    def reset(self):
+        self._values = dict(DEFAULTS)
 
     def load(self, path):
         parser = configparser.ConfigParser()

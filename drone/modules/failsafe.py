@@ -17,6 +17,7 @@ class Watchdog:
         self.armed = False
         self.mode = ""
         self.laser_range = float("nan")
+        self._last_laser = 0.0
         self._last_vision_pose = 0.0
 
         self._set_mode = rospy.ServiceProxy("mavros/set_mode", SetMode)
@@ -33,9 +34,12 @@ class Watchdog:
 
     def _laser_cb(self, msg):
         self.laser_range = msg.range
+        self._last_laser = rospy.get_time()
 
     def check(self, event=None):
         """Callback shape matches rospy.Timer: check(event)."""
+        if not self.armed:
+            self.emergency = False
         if not (self.armed and self.mode == "OFFBOARD"):
             return
 
@@ -56,3 +60,6 @@ class Watchdog:
         """Vision pose freshness, independent of arm state, so the server's
         'sensors' column can show a problem before takeoff too."""
         return abs(rospy.get_time() - self._last_vision_pose) <= self.vision_timeout
+
+    def rangefinder_ok(self):
+        return rospy.get_time() - self._last_laser <= self.vision_timeout

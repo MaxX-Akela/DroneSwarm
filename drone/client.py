@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+import base64
+import configparser
 import json
 import math
 import os
@@ -10,18 +12,20 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rospy
-from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 from sensor_msgs.msg import BatteryState
 
 import modules.checks as checks
 import modules.failsafe as failsafe
+import modules.flight as flight
 import modules.network as network
+import modules.remote as remote
 from modules.commander import TaskManager
 from modules.config import config
 from modules.utils import get_copter_id, setup_logger
+from modules.version import get_version
 
-CLIENT_VERSION = "0.1.0"
+CLIENT_VERSION = "0.1.0"  # fallback when the checkout has no .git
 
 DISCOVERY_PORT = 9000
 DISCOVERY_PERIOD = 2.0
@@ -32,9 +36,7 @@ SOCKET_TIMEOUT = 2.0
 
 logger = setup_logger()
 
-
-def _yaw_from_quaternion(q):
-    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y ** 2 + q.z ** 2))
+REMOTE_ACTIONS = ("write_file", "run_command", "restart_service", "reboot", "load_fcu_params")
 
 
 class NetworkManager:
@@ -46,12 +48,14 @@ class NetworkManager:
         self.telemetry_port = discovery_port + 1
         self.running = True
         self.server_ip = None
+        self._sock = None
+        self._send_lock = threading.Lock()
 
         self.telemetry = {
             "copter_id": self.copter_id,
-            "version": CLIENT_VERSION,
-            "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0,
-            "frame_id": config.flight_frame_id,
+            "version": get_version(CLIENT_VERSION),
+            "x": None, "y": None, "z": None, "yaw": None,
+            "frame_id": flight.FRAME_ID,
             "bat": 0.0, "armed": False, "mode": "IDLE", "connected": False,
         }
         self.checks_status = {"ok": None, "problems": ["not checked yet"]}
@@ -59,7 +63,6 @@ class NetworkManager:
 
         rospy.Subscriber("mavros/state", State, self._state_cb)
         rospy.Subscriber("mavros/battery", BatteryState, self._bat_cb)
-        rospy.Subscriber("mavros/local_position/pose", PoseStamped, self._pose_cb)
 
     def _state_cb(self, msg):
         self.telemetry["armed"], self.telemetry["mode"] = msg.armed, msg.mode
@@ -68,11 +71,36 @@ class NetworkManager:
     def _bat_cb(self, msg):
         self.telemetry["bat"] = round(msg.voltage, 2)
 
-    def _pose_cb(self, msg):
-        self.telemetry["x"] = round(msg.pose.position.x, 2)
-        self.telemetry["y"] = round(msg.pose.position.y, 2)
-        self.telemetry["z"] = round(msg.pose.position.z, 2)
-        self.telemetry["yaw"] = round(_yaw_from_quaternion(msg.pose.orientation), 2)
+    def _update_pose(self):
+        """Pose in aruco_map from the clover tf tree; None fields when the map isn't visible."""
+        pose = flight.get_pose()
+        if pose is None:
+            self.telemetry.update(x=None, y=None, z=None, yaw=None)
+        else:
+            self.telemetry.update(x=round(pose.x, 2), y=round(pose.y, 2), z=round(pose.z, 2),
+                                  yaw=None if math.isnan(pose.yaw) else round(pose.yaw, 2))
+
+    def _states(self):
+        """Per-column health, 'ok' / 'warn' / 'fail', shown as cell colors on the server."""
+        t = self.telemetry
+        sensors = "ok" if self.watchdog.sensors_ok() else "fail"
+        if sensors == "ok" and not self.watchdog.rangefinder_ok():
+            sensors = "warn"
+
+        if self.watchdog.is_emergency():
+            mode = "fail"
+        elif t["armed"] and t["mode"] != "OFFBOARD":
+            mode = "warn"
+        else:
+            mode = "ok"
+
+        return {
+            "system": "ok" if t["connected"] else "fail",
+            "sensors": sensors,
+            "battery": checks.battery_state(t["bat"]),
+            "mode": mode,
+            "position": "ok" if t["x"] is not None else "fail",
+        }
 
     def start(self):
         threading.Thread(target=self._command_loop, daemon=True).start()
@@ -98,10 +126,21 @@ class NetworkManager:
                 rospy.sleep(DISCOVERY_PERIOD)
         return None, None
 
-    @staticmethod
-    def _send_framed(sock, obj):
+    def _send_framed(self, sock, obj):
         data = json.dumps(obj).encode("utf-8")
-        sock.sendall(struct.pack("!I", len(data)) + data)
+        with self._send_lock:
+            sock.sendall(struct.pack("!I", len(data)) + data)
+
+    def _reply(self, text):
+        """Show a message in the server console (and in our own log)."""
+        logger.info(text)
+        sock = self._sock
+        if sock is None:
+            return
+        try:
+            self._send_framed(sock, {"type": "log", "text": text})
+        except OSError as e:
+            logger.debug("Reply to server failed: %s", e)
 
     def _command_loop(self):
         while self.running and not rospy.is_shutdown():
@@ -118,6 +157,7 @@ class NetworkManager:
                     sock.connect((server_ip, tcp_port))
                     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     self._send_framed(sock, {"type": "hello", "copter_id": self.copter_id})
+                    self._sock = sock
                     logger.info("Connected to server %s", server_ip)
                     while self.running and not rospy.is_shutdown():
                         raw_len = self._recv_exact(sock, 4)
@@ -131,27 +171,107 @@ class NetworkManager:
                         self._handle_command(msg.get("action"), msg.get("params", {}))
             except (OSError, ValueError) as e:
                 logger.warning("Command connection error: %s. Rediscovering...", e)
+            finally:
+                self._sock = None
 
     def _handle_command(self, action, params):
         if action == "check":
-            try:
-                self.checks_status = checks.self_check()
-            except Exception as e:
-                self.checks_status = {"ok": False, "problems": [f"self_check crashed: {e!r}"]}
+            # self_check can block for seconds on ROS timeouts; keep the command loop free.
+            threading.Thread(target=self._run_check, daemon=True).start()
         elif action == "set_config":
-            self._set_config(params.get("ini_text", ""))
+            self._set_config(params.get("ini_text", ""), params.get("mode", "rewrite"))
+        elif action == "set_animation":
+            self._set_animation(params.get("csv_text", ""))
+        elif action in REMOTE_ACTIONS:
+            # File writes, shell commands and service restarts can take a while:
+            # keep the command loop free for land/stop.
+            threading.Thread(target=self._run_remote, args=(action, params), daemon=True).start()
         else:
             self.commander.do_action(action, **params)
 
-    def _set_config(self, ini_text):
+    def _run_remote(self, action, params):
+        needs_ground = action == "reboot" or (action == "restart_service" and params.get("name") != "chrony")
+        if needs_ground and self.telemetry["armed"]:
+            self._reply(f"REFUSED {action}: drone is armed")
+            return
+        try:
+            if action == "write_file":
+                path = remote.write_file(params["path"], base64.b64decode(params["data"]))
+                self._reply(f"file written: {path}")
+                if params.get("restart"):
+                    self._restart(params["restart"])
+            elif action == "run_command":
+                code, output = remote.run_command(params["command"])
+                self._reply(f"$ {params['command']}\n[exit {code}] {output}")
+            elif action == "restart_service":
+                self._restart(params["name"])
+            elif action == "reboot":
+                self._reply("rebooting")
+                remote.reboot()
+            elif action == "load_fcu_params":
+                path = remote.write_file(params["path"], base64.b64decode(params["data"]))
+                self._reply(f"FCU parameters stored in {path}, loading...")
+                code, output = remote.load_fcu_params(path)
+                self._reply(f"FCU parameters load [exit {code}] {output}")
+        except Exception as e:
+            self._reply(f"ERROR in {action}: {e!r}")
+
+    def _restart(self, name):
+        if name != "chrony" and self.telemetry["armed"]:
+            self._reply(f"REFUSED restart of {name}: drone is armed")
+            return
+        if name == "swarm":
+            self._reply("restarting swarm service")
+            remote.restart_service_detached(name)
+            return
+        remote.restart_service(name)
+        self._reply(f"service restarted: {name}")
+        if name == "chrony" and self.server_ip:
+            # chronyd forgets the runtime-added server on restart.
+            threading.Event().wait(2.0)
+            network.set_chrony_server(self.server_ip)
+
+    def _run_check(self):
+        try:
+            self.checks_status = checks.self_check()
+        except Exception as e:
+            self.checks_status = {"ok": False, "problems": [f"self_check crashed: {e!r}"], "warnings": []}
+
+    def _set_animation(self, csv_text):
+        if self.telemetry["armed"]:
+            logger.error("Refusing to replace the animation while armed")
+            return
+        path = os.path.abspath(self.commander.animation.filepath)
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8", newline="") as f:
+                f.write(csv_text)
+            os.replace(tmp_path, path)
+        except OSError as e:
+            logger.error("Failed to store animation: %s", e)
+            return
+        logger.info("Animation received from server (%d bytes)", len(csv_text))
+        self.commander.do_action("reload_animation")
+
+    def _set_config(self, ini_text, mode="rewrite"):
         ini_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone.ini")
         try:
-            with open(ini_path, "w", encoding="utf-8") as f:
-                f.write(ini_text)
+            if mode == "modify":
+                remote.merge_ini(ini_path, ini_text)
+            else:
+                with open(ini_path, "w", encoding="utf-8") as f:
+                    f.write(ini_text)
+            config.reset()
             config.load(ini_path)
-            logger.info("Config updated from server (%d bytes)", len(ini_text))
+            self._reply(f"config updated ({mode})")
+            if self.telemetry["armed"]:
+                logger.warning("Armed: animation will use the new config after the next reload")
+            else:
+                self.commander.animation.on_config_update(config)
         except OSError as e:
-            logger.error("Failed to write pushed config: %s", e)
+            self._reply(f"ERROR: config not applied: {e}")
+        except configparser.Error as e:
+            self._reply(f"ERROR: bad config: {e}")
 
     @staticmethod
     def _recv_exact(sock, size):
@@ -169,8 +289,15 @@ class NetworkManager:
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         while self.running and not rospy.is_shutdown():
             if self.server_ip:
+                try:
+                    self._update_pose()
+                except Exception as e:
+                    logger.warning("Pose update failed: %r", e)
+                    self.telemetry.update(x=None, y=None, z=None, yaw=None)
                 payload = dict(self.telemetry)
+                payload["states"] = self._states()
                 payload["animation_id"] = self.commander.animation.id
+                payload["animation_state"] = self.commander.animation.state
                 start_frame = self.commander.animation.get_start_frame("fly")
                 payload["start_pos"] = start_frame.get_pos() if start_frame else []
                 payload["system"] = {"ok": self.telemetry["connected"]}
@@ -185,10 +312,7 @@ class NetworkManager:
 
     def _status_loop(self):
         while self.running and not rospy.is_shutdown():
-            try:
-                self.checks_status = checks.self_check()
-            except Exception as e:
-                self.checks_status = {"ok": False, "problems": [f"self_check crashed: {e!r}"]}
+            self._run_check()
             rospy.sleep(STATUS_CHECK_PERIOD)
 
     def _offset_loop(self):
