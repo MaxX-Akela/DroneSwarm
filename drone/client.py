@@ -108,6 +108,8 @@ class NetworkManager:
             server_ip, tcp_port = self._discover_server()
             if server_ip is None:
                 continue
+            if server_ip != self.server_ip:
+                network.set_chrony_server(server_ip, previous_ip=self.server_ip)
             self.server_ip = server_ip
             logger.info("Server found at %s, connecting on port %s", server_ip, tcp_port)
 

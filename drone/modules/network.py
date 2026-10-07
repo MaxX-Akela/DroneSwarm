@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import socket
 import struct
@@ -34,6 +35,34 @@ def get_chrony_offset(timeout=CHRONY_TIMEOUT):
     magnitude, direction = match.groups()
     offset = float(magnitude)
     return offset if direction == "fast" else -offset
+
+
+def _chronyc(*args, timeout=CHRONY_TIMEOUT):
+    cmd = ["chronyc", *args]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n", *cmd]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
+
+
+def set_chrony_server(server_ip, previous_ip=None):
+    """Point chrony at the discovered server at runtime (no fixed IP in chrony.conf)."""
+    try:
+        if previous_ip and previous_ip != server_ip:
+            try:
+                _chronyc("delete", previous_ip)
+            except subprocess.CalledProcessError:
+                pass
+        _chronyc("add", "server", server_ip, "iburst", "minpoll", "4", "maxpoll", "6")
+        logger.info("chrony time source set to %s", server_ip)
+        return True
+    except subprocess.CalledProcessError as e:
+        # "Source already present" is fine when the server rediscovered at the same IP.
+        if "already" in (e.stdout or "") + (e.stderr or "") + str(e.output or ""):
+            return True
+        logger.warning("chronyc add server failed: %s %s", e.stdout, e.stderr)
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("Could not configure chrony: %s", e)
+    return False
 
 
 def get_ntp_offset(server, timeout=NTP_TIMEOUT):
