@@ -118,6 +118,7 @@ class DroneDashboard(QMainWindow):
         restart_menu = selected_menu.addMenu("Restart service")
         for name in ("chrony", "ros", "swarm"):
             restart_menu.addAction(name, lambda checked=False, n=name: self.restart_service(n))
+        selected_menu.addAction("Update (git pull + restart)", self.update_selected_drones)
         selected_menu.addAction("Reload animation", lambda: self.send_to_selected("reload_animation"))
         selected_menu.addAction("Reboot", self.reboot_selected)
 
@@ -662,6 +663,30 @@ class DroneDashboard(QMainWindow):
         if reply == QMessageBox.Yes:
             self.network.broadcast_command(selected, "restart_service", {"name": name})
             self.log(f"> restart {name}: {', '.join(selected)}")
+
+    # Uses run_command only, so drones running an older client can be updated too.
+    UPDATE_COMMAND = (
+        "cd /home/pi/DroneSwarm && git -c safe.directory='*' pull --ff-only; rc=$?; "
+        "if [ $rc -eq 0 ]; then setsid sh -c 'sleep 3; sudo -n systemctl restart droneswarm' "
+        ">/dev/null 2>&1 < /dev/null & fi; exit $rc"
+    )
+
+    def update_selected_drones(self):
+        selected = self._require_selected()
+        if not selected:
+            return
+        armed = [c for c in selected if self.drones.get(c, {}).get("armed")]
+        targets = [c for c in selected if c not in armed]
+        if armed:
+            self.log(f"Update пропущен (armed): {', '.join(armed)}")
+        if not targets:
+            return
+        reply = QMessageBox.question(self, "Обновление",
+                                     f"git pull и перезапуск клиента на {len(targets)} дронах?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.network.broadcast_command(targets, "run_command", {"command": self.UPDATE_COMMAND})
+            self.log(f"> update: {', '.join(targets)}")
 
     def reboot_selected(self):
         selected = self._require_selected()
