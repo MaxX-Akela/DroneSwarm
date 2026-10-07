@@ -153,6 +153,8 @@ class DroneDashboard(QMainWindow):
         timing_form.addRow("Music after", self.music_after)
         self.play_music = QCheckBox("Play music")
         timing_form.addRow(self.play_music)
+        self.developer_mode = QCheckBox("Developer mode (ignore self-check)")
+        timing_form.addRow(self.developer_mode)
         control_vbox.addLayout(timing_form)
 
         btn_check = QPushButton("Проверка (Preflight check)")
@@ -217,6 +219,7 @@ class DroneDashboard(QMainWindow):
         # Drones are chosen with the checkbox in the first column, not by row selection.
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self.show_drone_details)
 
         log_group = QGroupBox("Консоль сервера")
         log_layout = QVBoxLayout(log_group)
@@ -243,7 +246,7 @@ class DroneDashboard(QMainWindow):
             self.table.insertRow(row)
             self.row_of[copter_id] = row
             item_id = QTableWidgetItem(copter_id)
-            item_id.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item_id.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
             item_id.setCheckState(Qt.Unchecked)
             item_id.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 0, item_id)
@@ -374,6 +377,31 @@ class DroneDashboard(QMainWindow):
         id_item.setBackground(STATE_COLORS[worst(overall)] if overall else QColor("white"))
         id_item.setForeground(QColor("black"))
 
+    def show_drone_details(self, row, column):
+        copter_id = self.table.item(row, 0).text()
+        t = self.drones.get(copter_id)
+        if t is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{copter_id}: config & errors")
+        dlg.resize(700, 600)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Config"))
+        cfg = t.get("config", {})
+        table = QTableWidget(len(cfg), 2)
+        table.setHorizontalHeaderLabels(["key", "value"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        for i, (k, v) in enumerate(sorted(cfg.items())):
+            table.setItem(i, 0, QTableWidgetItem(k))
+            table.setItem(i, 1, QTableWidgetItem(str(v)))
+        layout.addWidget(table, 3)
+        layout.addWidget(QLabel("Errors / warnings (latest 30)"))
+        errors = QPlainTextEdit("\n".join(t.get("errors", []) + t.get("checks", {}).get("problems", [])))
+        errors.setReadOnly(True)
+        layout.addWidget(errors, 2)
+        dlg.exec_()
+
     def set_all_checked(self, checked):
         state = Qt.Checked if checked else Qt.Unchecked
         for row in self.row_of.values():
@@ -417,7 +445,8 @@ class DroneDashboard(QMainWindow):
         if self.play_music.isChecked():
             self.log("Play music включен, но воспроизведение музыки не реализовано в этой версии сервера")
         start_time = time.time() + self.start_after.value()
-        self.network.broadcast_command(selected, "play", {"start_time": start_time})
+        self.network.broadcast_command(selected, "play", {"start_time": start_time,
+                                                         "ignore_checks": self.developer_mode.isChecked()})
         self.log(f"> Старт анимации через {self.start_after.value():.1f}с для {', '.join(selected)}")
 
     def disarm_selected(self):

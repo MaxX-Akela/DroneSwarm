@@ -78,6 +78,9 @@ class Config:
                 except (ValueError, SyntaxError) as e:
                     logger.warning("Bad value for %s = %r (%s), keeping default", flat_key, raw, e)
 
+    def as_dict(self):
+        return {k: list(v) if isinstance(v, tuple) else v for k, v in self._values.items()}
+
     def __getattr__(self, name):
         try:
             return self._values[name]

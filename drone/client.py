@@ -22,7 +22,7 @@ import modules.network as network
 import modules.remote as remote
 from modules.commander import TaskManager
 from modules.config import config
-from modules.utils import get_copter_id, setup_logger
+from modules.utils import ERROR_LOG, get_copter_id, setup_logger
 from modules.version import get_version
 
 CLIENT_VERSION = "0.1.0"  # fallback when the checkout has no .git
@@ -187,6 +187,11 @@ class NetworkManager:
             # keep the command loop free for land/stop.
             threading.Thread(target=self._run_remote, args=(action, params), daemon=True).start()
         else:
+            if action == "play":
+                params = dict(params)
+                if not params.pop("ignore_checks", False) and self.checks_status.get("ok") is False:
+                    self._reply("REFUSED play: self-check failed: " + "; ".join(self.checks_status.get("problems", [])))
+                    return
             self.commander.do_action(action, **params)
 
     def _run_remote(self, action, params):
@@ -303,6 +308,8 @@ class NetworkManager:
                 payload["system"] = {"ok": self.telemetry["connected"]}
                 payload["sensors"] = {"ok": self.watchdog.sensors_ok()}
                 payload["checks"] = self.checks_status
+                payload["config"] = config.as_dict()
+                payload["errors"] = list(ERROR_LOG)
                 payload["time_offset"] = self.time_offset
                 try:
                     udp_sock.sendto(json.dumps(payload).encode("utf-8"), (self.server_ip, self.telemetry_port))
