@@ -3,7 +3,7 @@
 Программное обеспечение для создания шоу дронов на платформах
 [COEX Klever 4.2](https://klever-doc.tech/ROS1/ru/) и [Technic 6S](https://docs.skyris.ru/technic6S/).
 
-## Образы для Orange Pi Pro / Raspberry Pi 4
+## Образы для OrangePi 5 Pro / Raspberry Pi 4
 
 Предварительно готовый образ с установленным и настроенным программным обеспечением доступен в разделе [Releases](https://github.com/MaxX-Akela/DroneSwarm/releases).
 
