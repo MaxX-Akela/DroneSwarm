@@ -1,5 +1,7 @@
 # DroneSwarm
 
+## [English version](https://github.com/MaxX-Akela/DroneSwarm/blob/main/README_EN.md)
+
 Программное обеспечение для создания шоу дронов на платформах
 [COEX Klever 4.2](https://klever-doc.tech/ROS1/ru/) и [Technic 6S](https://docs.skyris.ru/technic6S/).
 

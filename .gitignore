@@ -5,5 +5,4 @@ drone/drone.ini
 server/config/server.ini
 images/
 .vscode/
-.claude/
 drone/animation.csv

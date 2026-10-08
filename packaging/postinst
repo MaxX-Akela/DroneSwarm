@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    chown -R pi:pi /opt/droneswarm 2>/dev/null || true
+
+    # Time sync: use the drone chrony config, keep the original once.
+    CHRONY=/etc/chrony/chrony.conf
+    SRC=/usr/share/droneswarm/chrony-drone.conf
+    if [ -d /etc/chrony ] && [ -f "$SRC" ]; then
+        if [ -f "$CHRONY" ] && [ ! -f "$CHRONY.droneswarm-orig" ] && ! cmp -s "$SRC" "$CHRONY"; then
+            cp -a "$CHRONY" "$CHRONY.droneswarm-orig"
+        fi
+        cp "$SRC" "$CHRONY"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload || true
+        systemctl enable chrony droneswarm || true
+        if [ -d /run/systemd/system ]; then
+            systemctl restart chrony || true
+            # The updater restarts the client itself once apt has finished.
+            if [ -z "$DRONESWARM_NO_RESTART" ]; then
+                systemctl restart droneswarm || true
+            fi
+        fi
+    fi
+fi
+exit 0

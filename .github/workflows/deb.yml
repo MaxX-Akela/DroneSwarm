@@ -1,0 +1,63 @@
+name: DroneSwarm Deb
+
+on:
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: ver
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          V="${TAG#v}"
+          # Debian versions must start with a digit.
+          if ! printf '%s' "$V" | grep -qE '^[0-9][A-Za-z0-9.+~-]*$'; then
+            V="0.0.0+git$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+          packaging/build-deb.sh "${{ steps.ver.outputs.version }}" site
+
+      - name: Generate flat apt repository
+        run: |
+          cd site
+          apt-ftparchive packages . > Packages
+          gzip -9kf Packages
+          apt-ftparchive release . > Release
+          cp ../packaging/index.html index.html
+
+      - name: Upload .deb to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: site/*.deb
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

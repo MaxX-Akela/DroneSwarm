@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    CHRONY=/etc/chrony/chrony.conf
+    if [ -f "$CHRONY.droneswarm-orig" ]; then
+        mv "$CHRONY.droneswarm-orig" "$CHRONY"
+        if [ -d /run/systemd/system ]; then systemctl restart chrony || true; fi
+    fi
+fi
+if [ "$1" = "purge" ]; then
+    rm -rf /opt/droneswarm
+fi
+exit 0

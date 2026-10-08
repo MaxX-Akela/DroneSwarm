@@ -1,0 +1,16 @@
+[Unit]
+Description=DroneSwarm Client Service
+After=network.target clover.service roscore.service
+Wants=clover.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/droneswarm/drone
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -c '. /opt/ros/noetic/setup.bash; . /home/pi/catkin_ws/devel/setup.bash; exec /usr/bin/python3 /opt/droneswarm/drone/client.py'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

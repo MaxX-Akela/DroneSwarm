@@ -1,0 +1,11 @@
+Package: drone-swarm
+Version: @VERSION@
+Section: misc
+Priority: optional
+Architecture: all
+Depends: python3, chrony, sudo
+Maintainer: MaxX-Akela <maxx-akela@proton.me>
+Homepage: https://github.com/MaxX-Akela/DroneSwarm
+Description: DroneSwarm client for drone shows (COEX Clover / Technic 6S)
+ Drone-side client of DroneSwarm. Installs the client and its systemd
+ service, and configures chrony for time synchronisation with the show server.
