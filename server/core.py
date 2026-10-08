@@ -665,8 +665,12 @@ class DroneDashboard(QMainWindow):
             self.log(f"> restart {name}: {', '.join(selected)}")
 
     # Uses run_command only, so drones running an older client can be updated too.
+    # Git checkout (image) -> git pull; apt install (/opt/droneswarm) -> apt upgrade of drone-swarm.
     UPDATE_COMMAND = (
-        "cd /home/pi/DroneSwarm && git -c safe.directory='*' pull --ff-only; rc=$?; "
+        "if [ -d /home/pi/DroneSwarm/.git ]; then "
+        "cd /home/pi/DroneSwarm && git -c safe.directory='*' pull --ff-only; "
+        "else sudo -n apt-get update && "
+        "sudo -n env DRONESWARM_NO_RESTART=1 apt-get install -y --only-upgrade drone-swarm; fi; rc=$?; "
         "if [ $rc -eq 0 ]; then setsid sh -c 'sleep 3; sudo -n systemctl restart droneswarm' "
         ">/dev/null 2>&1 < /dev/null & fi; exit $rc"
     )
@@ -682,7 +686,7 @@ class DroneDashboard(QMainWindow):
         if not targets:
             return
         reply = QMessageBox.question(self, "Обновление",
-                                     f"git pull и перезапуск клиента на {len(targets)} дронах?",
+                                     f"Обновление (git pull / apt) и перезапуск клиента на {len(targets)} дронах?",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.network.broadcast_command(targets, "run_command", {"command": self.UPDATE_COMMAND})

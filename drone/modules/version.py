@@ -15,11 +15,30 @@ def _git(*args):
     ).stdout.strip()
 
 
+PACKAGE = "drone-swarm"
+
+
+def _package_version():
+    """Version of the installed .deb, or None when running from a git checkout."""
+    try:
+        out = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Version}", PACKAGE],
+            capture_output=True, text=True, timeout=GIT_TIMEOUT, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
 def get_version(fallback="unknown"):
     """'<branch>@<short commit id>' of the checkout this code runs from.
 
+    For an apt install (no .git) it is the package version instead.
+
     A trailing '*' marks tracked files modified on top of that commit.
     """
+    if not os.path.exists(os.path.join(REPO_DIR, ".git")):
+        return _package_version() or fallback
     try:
         sha = _git("rev-parse", "--short", "HEAD")
         branch = _git("rev-parse", "--abbrev-ref", "HEAD")
