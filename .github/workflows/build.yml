@@ -45,9 +45,9 @@ jobs:
           TAG="${{ steps.get_tag.outputs.TAG_NAME }}"
           for img in *.img; do
             if [ -f "$img" ]; then
-              NEW_NAME="${img%.*}-${TAG}.img"
+              NEW_NAME="droneswarm_${TAG}.zip"
               echo "Zipping $NEW_NAME..."
-              zip -9 "${NEW_NAME%.*}.zip" "$img"
+              zip -9 "$NEW_NAME" "$img"
 
               rm "$img"
             fi
