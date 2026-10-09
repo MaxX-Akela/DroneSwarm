@@ -1,8 +1,6 @@
 __pycache__/
 *.pyc
 *.log
-drone/drone.ini
-server/config/server.ini
 images/
 .vscode/
 drone/animation.csv
