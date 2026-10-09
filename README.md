@@ -7,6 +7,8 @@
 
 ## Образы для OrangePi 5 Pro / Raspberry Pi 4
 
+> 🚧 Образ для **Technic 6S** и **OrangePi 5 Pro** пока в разработке. Сейчас готов образ для Clover на Raspberry Pi 4.
+
 Предварительно готовый образ с установленным и настроенным программным обеспечением доступен в разделе [Releases](https://github.com/MaxX-Akela/DroneSwarm/releases).
 
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/MaxX-Akela/DroneSwarm/build.yml?branch=master)

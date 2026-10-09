@@ -5,6 +5,8 @@ Software for creating drone shows on the
 
 ## Images for OrangePi 5 Pro / Raspberry Pi 4
 
+> 🚧 The image for **Technic 6S** and **OrangePi 5 Pro** is still in development. Only the Clover image for Raspberry Pi 4 is ready for now.
+
 A pre-configured image with the software installed and set up is available in the [Releases](https://github.com/MaxX-Akela/DroneSwarm/releases) section.
 
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/MaxX-Akela/DroneSwarm/build.yml?branch=master)
