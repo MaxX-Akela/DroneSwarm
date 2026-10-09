@@ -10,11 +10,12 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 chmod 755 "$STAGE"
 
-install -d "$STAGE/DEBIAN" "$STAGE/opt/droneswarm" "$STAGE/lib/systemd/system" "$STAGE/usr/share/droneswarm"
+install -d "$STAGE/usr/bin" "$STAGE/DEBIAN" "$STAGE/opt/droneswarm" "$STAGE/lib/systemd/system" "$STAGE/usr/share/droneswarm"
 
 tar -C "$ROOT" --exclude='__pycache__' --exclude='*.pyc' --exclude='drone.ini' --exclude='animation.csv' \
     -cf - drone | tar -C "$STAGE/opt/droneswarm" -xf -
 install -m 644 "$HERE/droneswarm.service" "$STAGE/lib/systemd/system/droneswarm.service"
+install -m 755 "$HERE/drone-setup" "$STAGE/usr/bin/drone-setup"
 install -m 644 "$ROOT/builder/assets/chrony-drone.conf" "$STAGE/usr/share/droneswarm/chrony-drone.conf"
 
 sed "s/@VERSION@/$VERSION/" "$HERE/control" > "$STAGE/DEBIAN/control"

@@ -61,6 +61,8 @@ else
     echo "Warning: chrony config ${CHRONY_CONF} not found!"
 fi
 
+sudo install -m 755 "${REPO_DIR}/packaging/drone-setup" "${MOUNT_POINT}/usr/bin/drone-setup"
+
 echo "Unmounting"
 sudo umount ${MOUNT_POINT}/boot
 sudo umount ${MOUNT_POINT}

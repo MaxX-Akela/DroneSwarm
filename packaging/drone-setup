@@ -1,0 +1,107 @@
+#!/bin/bash
+# drone-setup <WIFI-SSID> <WIFI_PASS> <NAME>
+# Connects the drone to the router's Wi-Fi and sets the hostname (drone name).
+set -euo pipefail
+
+usage() {
+    echo "usage: drone-setup <WIFI-SSID> <WIFI_PASS> <NAME>" >&2
+    echo "example: drone-setup Keenetic-8989 iloverclover4 clover-1" >&2
+    exit 1
+}
+
+[ "$#" -eq 3 ] || usage
+SSID="$1"
+PASS="$2"
+NAME="$3"
+
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo -E "$0" "$@"
+fi
+
+# WPA2-PSK passphrase must be 8..63 characters.
+if [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; then
+    echo "error: Wi-Fi password must be 8-63 characters" >&2
+    exit 1
+fi
+# Hostname: RFC 1123 label.
+if ! [[ "$NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+    echo "error: NAME must contain only letters, digits and '-' (e.g. clover-1)" >&2
+    exit 1
+fi
+
+IFACE="${DRONE_SETUP_IFACE:-wlan0}"
+
+set_hostname() {
+    local old
+    old="$(hostname)"
+    echo "$NAME" > /etc/hostname
+    hostname "$NAME"
+    if grep -qE '^127\.0\.1\.1\s' /etc/hosts; then
+        sed -i -E "s/^(127\.0\.1\.1\s+).*/\1$NAME/" /etc/hosts
+    else
+        echo "127.0.1.1	$NAME" >> /etc/hosts
+    fi
+    echo "Hostname: $old -> $NAME"
+}
+
+# Escape for double-quoted wpa_supplicant strings.
+wpa_quote() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+setup_wifi_nm() {
+    nmcli connection delete "droneswarm" >/dev/null 2>&1 || true
+    nmcli connection add type wifi ifname "$IFACE" con-name droneswarm ssid "$SSID" \
+        wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+        connection.autoconnect yes connection.autoconnect-priority 100 >/dev/null
+    # Drop the access point profiles so the drone stays a client.
+    nmcli -t -f NAME,TYPE,802-11-wireless.mode connection show 2>/dev/null \
+        | awk -F: '$2=="802-11-wireless" && $3=="ap"{print $1}' \
+        | while read -r c; do nmcli connection modify "$c" connection.autoconnect no || true; done
+    (sleep 2; nmcli connection up droneswarm) >/dev/null 2>&1 &
+}
+
+setup_wifi_wpa() {
+    local conf=/etc/wpa_supplicant/wpa_supplicant.conf
+    # A per-interface file takes precedence over the shared one.
+    [ -f "/etc/wpa_supplicant/wpa_supplicant-$IFACE.conf" ] && conf="/etc/wpa_supplicant/wpa_supplicant-$IFACE.conf"
+    [ -f "$conf.droneswarm-orig" ] || { [ -f "$conf" ] && cp -a "$conf" "$conf.droneswarm-orig"; } || true
+
+    local country
+    country="$(sed -nE 's/^country=(.*)/\1/p' "$conf" 2>/dev/null | head -n1)"
+    umask 077
+    {
+        echo "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev"
+        echo "update_config=1"
+        echo "country=${country:-GB}"
+        echo
+        echo "network={"
+        echo "    ssid=\"$(wpa_quote "$SSID")\""
+        echo "    psk=\"$(wpa_quote "$PASS")\""
+        echo "    key_mgmt=WPA-PSK"
+        echo "}"
+    } > "$conf.new"
+    mv "$conf.new" "$conf"
+
+    # AP mode uses a static address for wlan0; make it a DHCP client (see Clover network guide).
+    if [ -f /etc/dhcpcd.conf ] && grep -qE "^interface $IFACE\s*$" /etc/dhcpcd.conf; then
+        [ -f /etc/dhcpcd.conf.droneswarm-orig ] || cp -a /etc/dhcpcd.conf /etc/dhcpcd.conf.droneswarm-orig
+        sed -i -E "/^interface $IFACE\s*$/ s/^/#/; /^static ip_address=192\.168\.11\.1\/24/ s/^/#/" /etc/dhcpcd.conf
+    fi
+    # The AP needs a DHCP server; the client does not.
+    systemctl disable --now dnsmasq >/dev/null 2>&1 || true
+    # dhcpcd starts wpa_supplicant itself, so restarting it applies the new config.
+    (sleep 2; systemctl restart dhcpcd) >/dev/null 2>&1 &
+}
+
+set_hostname
+
+if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager; then
+    setup_wifi_nm
+else
+    setup_wifi_wpa
+fi
+
+echo "Wi-Fi: connecting to '$SSID'. The drone's own network will disappear;"
+echo "this SSH session will drop. Reconnect via your router."
+# Restart the client so it reports the new name.
+(sleep 5; systemctl restart droneswarm) >/dev/null 2>&1 &
+exit 0
