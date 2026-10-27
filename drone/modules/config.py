@@ -36,6 +36,9 @@ DEFAULTS = {
     "checks_battery_warn_voltage": 3.7,
     "checks_fcu_timeout": 3.0,
     "checks_service_timeout": 2.0,
+
+    # Clover web directory; the "View Swarm visualization" link is added to its index.html.
+    "web_clover_www": "/home/pi/catkin_ws/src/clover/clover/www",
 }
 
 

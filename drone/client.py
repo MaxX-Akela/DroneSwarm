@@ -20,12 +20,13 @@ import modules.failsafe as failsafe
 import modules.flight as flight
 import modules.network as network
 import modules.remote as remote
+import modules.web as web
 from modules.commander import TaskManager
 from modules.config import config
 from modules.utils import ERROR_LOG, get_copter_id, setup_logger
 from modules.version import get_version
 
-CLIENT_VERSION = "0.1.0"  # fallback when the checkout has no .git
+CLIENT_VERSION = "0.1.0"
 
 DISCOVERY_PORT = 9000
 DISCOVERY_PERIOD = 2.0
@@ -48,6 +49,7 @@ class NetworkManager:
         self.telemetry_port = discovery_port + 1
         self.running = True
         self.server_ip = None
+        self.web_port = None
         self._sock = None
         self._send_lock = threading.Lock()
 
@@ -120,6 +122,7 @@ class NetworkManager:
                     data, addr = sock.recvfrom(1024)
                     reply = json.loads(data.decode("utf-8"))
                     if reply.get("type") == "discover_reply":
+                        self.web_port = reply.get("web_port")
                         return addr[0], reply["tcp_port"]
                 except (socket.timeout, OSError, ValueError, KeyError) as e:
                     logger.debug("Discovery attempt failed: %s", e)
@@ -150,6 +153,7 @@ class NetworkManager:
             if server_ip != self.server_ip:
                 network.set_chrony_server(server_ip, previous_ip=self.server_ip)
             self.server_ip = server_ip
+            threading.Thread(target=web.install_swarm_link, args=(server_ip, self.web_port), daemon=True).start()
             logger.info("Server found at %s, connecting on port %s", server_ip, tcp_port)
 
             try:

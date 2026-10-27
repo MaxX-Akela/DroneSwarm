@@ -18,8 +18,7 @@ command_long = rospy.ServiceProxy("mavros/cmd/command", CommandLong)
 MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN = 246
 MAV_CMD_PREFLIGHT_CALIBRATION = 241
 
-# Every flight command is expressed in the ArUco map frame, never in "map"/"body"
-# (except stop(), which only holds the current position).
+
 FRAME_ID = "aruco_map"
 LAND_TIMEOUT = 4
 TAKEOFF_TIMEOUT = 5

@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 CHRONY_TIMEOUT = 2.0
 NTP_TIMEOUT = 2.0
 NTP_PORT = 123
-# NTP epoch (1900-01-01) to Unix epoch (1970-01-01), in seconds.
 NTP_UNIX_DELTA = 2208988800
 
 _CHRONY_LEAP_RE = re.compile(r"Leap status\s*:\s*(.+)")
@@ -28,8 +27,6 @@ def get_chrony_offset(timeout=CHRONY_TIMEOUT):
         logger.debug("chronyc unavailable: %s", e)
         return None
 
-    # chronyd with no reachable source still reports "System time: 0.0 seconds",
-    # which is not a real measurement.
     leap = _CHRONY_LEAP_RE.search(output)
     if not leap or leap.group(1).strip().lower().startswith("not synchronised"):
         return None

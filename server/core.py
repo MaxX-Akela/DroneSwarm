@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.config import CONFIG_PATH, config
 from modules.network import NetworkManager
 from modules.version import get_version, git_pull
+from modules.web import SwarmWebServer
 
 COLUMNS = [
     "copter ID", "version", "animation ID", "battery", "system", "sensors",
@@ -29,10 +30,8 @@ COLUMNS = [
 COL_VERSION, COL_ANIMATION, COL_BATTERY, COL_SYSTEM, COL_SENSORS = 1, 2, 3, 4, 5
 COL_MODE, COL_CHECKS, COL_POSITION, COL_START, COL_DT = 6, 7, 8, 9, 10
 
-# Time offset limits (seconds) for the dt column.
 DT_OK = 0.05
 DT_WARN = 0.2
-# Distance (m) between the drone and its animation start point before takeoff.
 START_OK = 0.3
 START_WARN = 1.0
 AIRBORNE_Z = 0.3
@@ -95,6 +94,11 @@ class DroneDashboard(QMainWindow):
         self.network.drone_disconnected.connect(self.on_drone_disconnected)
         self.network.log_message.connect(self.log)
         self.network.start()
+        self.web = SwarmWebServer(self.network.is_connected)
+        if self.web.start():
+            self.log(f"Swarm visualization on http://<server-ip>:{config.web_port}/")
+        else:
+            self.log(f"ERROR: can't start swarm visualization on port {config.web_port}")
         self.update_finished.connect(self.on_update_finished)
 
         self.stale_timer = QTimer(self)
@@ -242,6 +246,7 @@ class DroneDashboard(QMainWindow):
         # Telemetry (UDP) can outlive the command link (TCP); such a drone can't be commanded.
         telemetry["_offline"] = not self.network.is_connected(copter_id)
         self.drones[copter_id] = telemetry
+        self.web.update(copter_id, telemetry)
         if copter_id not in self.row_of:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -581,6 +586,8 @@ class DroneDashboard(QMainWindow):
     def send_aruco_map(self):
         selected = self._require_selected()
         path = selected and self._pick_file("Карта ArUco", "Aruco map (*.txt);;All files (*)")
+        if path:
+            self.web.set_aruco_map(path)
         for copter_id in (selected if path else []):
             # The map is read by clover at startup, so clover restarts after the upload.
             self._send_write_file(copter_id, path, config.paths_aruco_map, restart="ros")
@@ -773,11 +780,13 @@ class DroneDashboard(QMainWindow):
             self._restart_process()
 
     def _restart_process(self):
+        self.web.stop()
         self.network.stop()
         subprocess.Popen([sys.executable] + sys.argv)
         QApplication.quit()
 
     def closeEvent(self, event):
+        self.web.stop()
         self.network.stop()
         event.accept()
 

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Swarm visualization</title>
+<style>
+	html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1e1e; font-family: sans-serif; }
+	#viz { position: absolute; inset: 0; }
+	#info { position: absolute; top: 8px; left: 8px; color: #ddd; font-size: 13px; background: rgba(0,0,0,.55); padding: 6px 10px; border-radius: 4px; }
+	#info b { color: #fff; }
+	.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+</style>
+<script src="js/three.min.js"></script>
+</head>
+<body>
+<div id="viz"></div>
+<div id="info"></div>
+<script>
+// Same frame as Clover's 3D visualization: aruco_map, Z up.
+var COLOR_MAP = 0x2ecc71, COLOR_ANIM = 0xf1c40f, COLOR_OFFLINE = 0x777777;
+var POLL_MS = 200;
+
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(50, 1, 0.05, 200);
+camera.up.set(0, 0, 1);
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+document.getElementById('viz').appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+var grid = new THREE.GridHelper(10, 20, 0x888888, 0x444444);
+grid.rotation.x = Math.PI / 2;
+scene.add(grid);
+scene.add(new THREE.AxisHelper(1));
+
+// --- orbit controls: left drag rotates, right drag pans, wheel zooms ---
+var target = new THREE.Vector3(2, 2, 0), dist = 9, theta = -Math.PI / 4, phi = 1.0;
+function placeCamera() {
+	camera.position.set(
+		target.x + dist * Math.sin(phi) * Math.cos(theta),
+		target.y + dist * Math.sin(phi) * Math.sin(theta),
+		target.z + dist * Math.cos(phi));
+	camera.lookAt(target);
+}
+var dragging = null;
+var el = renderer.domElement;
+el.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+el.addEventListener('mousedown', function(e) { dragging = { x: e.clientX, y: e.clientY, pan: e.button !== 0 }; });
+window.addEventListener('mouseup', function() { dragging = null; });
+window.addEventListener('mousemove', function(e) {
+	if (!dragging) return;
+	var dx = e.clientX - dragging.x, dy = e.clientY - dragging.y;
+	dragging.x = e.clientX; dragging.y = e.clientY;
+	if (dragging.pan) {
+		var k = dist * 0.0015;
+		var right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+		var up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+		target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+	} else {
+		theta -= dx * 0.005;
+		phi = Math.min(Math.max(phi - dy * 0.005, 0.05), Math.PI - 0.05);
+	}
+	placeCamera();
+});
+el.addEventListener('wheel', function(e) {
+	e.preventDefault();
+	dist = Math.min(Math.max(dist * (e.deltaY > 0 ? 1.1 : 0.9), 0.5), 80);
+	placeCamera();
+}, { passive: false });
+function resize() {
+	renderer.setSize(window.innerWidth, window.innerHeight);
+	camera.aspect = window.innerWidth / window.innerHeight;
+	camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+function label(text) {
+	var c = document.createElement('canvas');
+	c.width = 256; c.height = 64;
+	var g = c.getContext('2d');
+	g.font = 'bold 40px sans-serif';
+	g.textAlign = 'center'; g.textBaseline = 'middle';
+	g.lineWidth = 6; g.strokeStyle = '#000'; g.strokeText(text, 128, 32);
+	g.fillStyle = '#fff'; g.fillText(text, 128, 32);
+	var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+	s.scale.set(0.8, 0.2, 1);
+	return s;
+}
+
+// --- aruco map: flat squares with the marker id, like /aruco_map/visualization ---
+var mapGroup = new THREE.Group();
+scene.add(mapGroup);
+var mapKey = null;
+function drawMap(markers) {
+	var key = JSON.stringify(markers);
+	if (key === mapKey) return;
+	mapKey = key;
+	while (mapGroup.children.length) mapGroup.remove(mapGroup.children[0]);
+	markers.forEach(function(m) {
+		var quad = new THREE.Mesh(new THREE.PlaneGeometry(m.size, m.size),
+			new THREE.MeshBasicMaterial({ color: 0xdddddd, side: THREE.DoubleSide }));
+		quad.rotation.order = 'ZYX';
+		quad.rotation.set(m.rx, m.ry, m.rz);
+		quad.position.set(m.x, m.y, m.z);
+		var id = label(String(m.id));
+		id.scale.multiplyScalar(Math.max(m.size * 2.5, 0.2));
+		id.position.set(m.x, m.y, m.z + 0.01);
+		mapGroup.add(quad, id);
+	});
+}
+
+// --- drones ---
+var drones = {};
+function makeDrone(id) {
+	var g = new THREE.Group();
+	var body = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.05), new THREE.MeshBasicMaterial({ color: COLOR_MAP }));
+	var nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 8), new THREE.MeshBasicMaterial({ color: 0xe74c3c }));
+	nose.rotation.z = -Math.PI / 2;
+	nose.position.x = 0.17;
+	var tag = label(id);
+	tag.position.z = 0.25;
+	g.add(body, nose);
+	scene.add(g, tag);
+	return { group: g, body: body, tag: tag };
+}
+function applyDrones(list) {
+	var seen = {};
+	list.forEach(function(d) {
+		seen[d.id] = true;
+		var o = drones[d.id] || (drones[d.id] = makeDrone(d.id));
+		o.group.visible = o.tag.visible = !!d.pos;
+		if (!d.pos) return;
+		o.group.position.set(d.pos[0], d.pos[1], d.pos[2]);
+		o.group.rotation.z = d.yaw;
+		o.tag.position.set(d.pos[0], d.pos[1], d.pos[2] + 0.25);
+		o.body.material.color.setHex(!d.online ? COLOR_OFFLINE : d.source === 'aruco_map' ? COLOR_MAP : COLOR_ANIM);
+	});
+	Object.keys(drones).forEach(function(id) {
+		if (seen[id]) return;
+		scene.remove(drones[id].group, drones[id].tag);
+		delete drones[id];
+	});
+}
+
+function dot(color) { return '<span class="dot" style="background:#' + ('000000' + color.toString(16)).slice(-6) + '"></span>'; }
+function showInfo(list) {
+	var seen = list.filter(function(d) { return d.online && d.source === 'aruco_map'; }).length;
+	document.getElementById('info').innerHTML = '<b>Swarm</b>: ' + list.length + ' drones, ' + seen + ' see the map<br>' +
+		dot(COLOR_MAP) + 'sees aruco_map &nbsp;' + dot(COLOR_ANIM) + 'animation position &nbsp;' + dot(COLOR_OFFLINE) + 'offline';
+}
+
+function poll() {
+	Promise.all([fetch('api/swarm').then(function(r) { return r.json(); }),
+		fetch('api/map').then(function(r) { return r.json(); })]).then(function(res) {
+		applyDrones(res[0].drones);
+		drawMap(res[1]);
+		showInfo(res[0].drones);
+		document.title = 'Swarm visualization';
+	}).catch(function() {
+		document.title = 'Disconnected';
+	});
+}
+
+resize();
+placeCamera();
+poll();
+setInterval(poll, POLL_MS);
+(function animate() {
+	requestAnimationFrame(animate);
+	renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

@@ -11,6 +11,9 @@ DEFAULTS = {
     "network_bind_address": "0.0.0.0",
     "network_drone_timeout": 5.0,
     "server_log_dir": ".",
+    # Swarm 3D visualization page; aruco_map is the map file drawn on it ("" = no markers).
+    "web_port": 8765,
+    "web_aruco_map": "",
     # Where files sent from the server menu land on the drone.
     "paths_camera_calibration": "/home/pi/catkin_ws/src/clover/clover/camera_info/fisheye_cam_320x240.yaml",
     "paths_aruco_map": "/home/pi/catkin_ws/src/clover/aruco_pose/map/map.txt",

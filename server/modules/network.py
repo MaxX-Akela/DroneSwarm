@@ -105,7 +105,8 @@ class NetworkManager(QObject):
                 data, addr = sock.recvfrom(1024)
                 msg = json.loads(data.decode("utf-8"))
                 if msg.get("type") == "discover":
-                    reply = json.dumps({"type": "discover_reply", "tcp_port": self.tcp_port}).encode("utf-8")
+                    reply = json.dumps({"type": "discover_reply", "tcp_port": self.tcp_port,
+                                        "web_port": config.web_port}).encode("utf-8")
                     sock.sendto(reply, addr)
             except socket.timeout:
                 continue

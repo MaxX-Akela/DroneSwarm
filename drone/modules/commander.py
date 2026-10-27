@@ -12,10 +12,6 @@ logger = logging.getLogger(__name__)
 
 ANIMATION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "animation.csv")
 
-# Backstop for do_action(): normally task_stopped is set by the worker almost
-# immediately after interrupter is set, since every blocking wait loop in
-# flight/animation checks it every 0.05-0.2s. This timeout only protects
-# against a stuck task that never checks the interrupter.
 INTERRUPT_TIMEOUT = 2.0
 
 def wait(deadline, interrupter, interval=0.05):
@@ -31,7 +27,6 @@ def wait(deadline, interrupter, interval=0.05):
             return False
         rospy.sleep(min(interval, remaining))
     return False
-
 
 class TaskManager:
 
