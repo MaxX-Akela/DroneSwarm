@@ -3,6 +3,10 @@
 Software for creating drone shows on the
 [COEX Klever 4.2](https://klever-doc.tech/ROS1/ru/) and [Technic 6S](https://docs.skyris.ru/technic6S/) platforms.
 
+## Демо Видео
+
+[![test-1](http://img.youtube.com/vi/video/0.jpg)](http://www.youtube.com/watch?v=video)
+
 ## Images for OrangePi 5 Pro / Raspberry Pi 4
 
 > 🚧 The image for **Technic 6S** and **OrangePi 5 Pro** is still in development. Only the Clover image for Raspberry Pi 4 is ready for now.

@@ -5,6 +5,10 @@
 Программное обеспечение для создания шоу дронов на платформах
 [COEX Klever 4.2](https://klever-doc.tech/ROS1/ru/) и [Technic 6S](https://docs.skyris.ru/technic6S/).
 
+## Демо Видео
+
+[![test-1](http://img.youtube.com/vi/video/0.jpg)](http://www.youtube.com/watch?v=video)
+
 ## Образы для OrangePi 5 Pro / Raspberry Pi 4
 
 > 🚧 Образ для **Technic 6S** и **OrangePi 5 Pro** пока в разработке. Сейчас готов образ для Clover на Raspberry Pi 4.

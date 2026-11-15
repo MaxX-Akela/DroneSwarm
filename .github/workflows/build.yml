@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # The image builder copies /usr/bin/qemu-arm-static from the host.
+    # Ubuntu 26.04 makes qemu-user-static a virtual package and changes the binary name.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout DroneSwarm
         uses: actions/checkout@v4

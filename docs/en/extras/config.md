@@ -98,6 +98,13 @@ The file `server/config/server.ini`. The template is `server/config/server.examp
 |---|---|---|
 | `log_dir` | `.` | folder for logs |
 
+### [web]
+
+| Parameter | Default | Description |
+|---|---|---|
+| `port` | `8765` | port of the swarm visualization page |
+| `aruco_map` | empty | ArUco map file drawn on the page |
+
 ### [paths]
 
 Where files sent from the **Send** menu are placed on the drone.

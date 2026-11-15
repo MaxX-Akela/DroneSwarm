@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHeaderView, QTextEdit, QMessageBox, QLabel, QGroupBox,
                              QAbstractItemView, QDoubleSpinBox, QCheckBox, QFormLayout,
                              QPlainTextEdit, QDialog, QDialogButtonBox, QMenuBar,
-                             QFileDialog, QInputDialog)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+                             QFileDialog, QInputDialog, QStyledItemDelegate)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
 from PyQt5.QtGui import QColor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,6 +50,20 @@ OK_COLOR = QColor("#ccffcc")
 WARN_COLOR = QColor("#ffe566")
 FAIL_COLOR = QColor("#ff9999")
 STATE_COLORS = {"ok": OK_COLOR, "warn": WARN_COLOR, "fail": FAIL_COLOR}
+
+
+class DroneCheckDelegate(QStyledItemDelegate):
+    """Toggle the drone checkbox when any part of its ID cell is clicked."""
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            state = index.data(Qt.CheckStateRole)
+            if state is not None:
+                next_state = Qt.Unchecked if state == Qt.Checked else Qt.Checked
+                return model.setData(index, next_state, Qt.CheckStateRole)
+        if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
+            return True
+        return super().editorEvent(event, model, option, index)
 
 
 class ConfigEditorDialog(QDialog):
@@ -224,6 +238,7 @@ class DroneDashboard(QMainWindow):
         # Drones are chosen with the checkbox in the first column, not by row selection.
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setItemDelegateForColumn(0, DroneCheckDelegate(self.table))
         self.table.cellDoubleClicked.connect(self.show_drone_details)
 
         log_group = QGroupBox("Консоль сервера")

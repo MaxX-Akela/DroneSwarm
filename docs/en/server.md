@@ -129,6 +129,16 @@ Other items:
 
 **Select all** and **Deselect all** — check or uncheck all drones.
 
+## Swarm visualization
+
+The server serves a 3D page with all drones at `http://<server-ip>:8765/` (`[web] port` in the [config](extras/config.md)). It works like Clover's "3D visualization for markers map", but for the whole swarm:
+
+* a drone that sees the ArUco map is drawn at its real position (green);
+* a drone that does not see it is drawn at the start point of its loaded animation (yellow);
+* an offline drone is gray.
+
+The ArUco map is taken from `[web] aruco_map` or from the last map sent via **Send → Aruco map...**. Once a drone connects to the server, the **View Swarm visualization** line appears in its Clover web menu (`http://<drone>/`) and opens this page.
+
 ## Console
 
 The console of the server is at the bottom of the window. It shows drones connecting and disconnecting, replies to commands (`file written`, `config updated`, the result of `run_command`, etc.) and errors. Drone messages are prefixed with the drone's name in square brackets.
